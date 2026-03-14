@@ -1,0 +1,27 @@
+version: "3.9"
+
+services:
+  api:
+    build: .
+    container_name: chvk_api
+    command: uvicorn chvk_city.backend.main:app --host 0.0.0.0 --port 8000
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  bot:
+    build: .
+    container_name: chvk_bot
+    command: python -m chvk_city.bot.telegram.bot
+    env_file:
+      - .env
+    depends_on:
+      - api
+    restart: unless-stopped
+
+networks:
+  default:
+    name: chvk_network
+
