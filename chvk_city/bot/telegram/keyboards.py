@@ -240,6 +240,14 @@ def get_skip_comment_keyboard():
     buttons = [[InlineKeyboardButton(text="➡️ Пропустить", callback_data="skip_comment")]]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
+
+def get_destination_flow_keyboard():
+    buttons = [
+        [InlineKeyboardButton(text="➕ Добавить еще адрес", callback_data="add_more_destination")],
+        [InlineKeyboardButton(text="✅ Посчитать стоимость", callback_data="calculate_route_price")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
 def get_order_manage_keyboard(order_id: int):
     buttons = [[InlineKeyboardButton(text="❌ Отменить заказ", callback_data=f"cancel_{order_id}")]]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
