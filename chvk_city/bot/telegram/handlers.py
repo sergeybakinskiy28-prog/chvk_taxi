@@ -252,6 +252,8 @@ async def cmd_start(message: Message, state: FSMContext):
     except Exception as e:
         logger.error(f"Failed to fetch user {user_id}: {e}")
         print(f"[API] get user {user_id}: {e}", flush=True)
+        await message.answer("An error occurred. Please try again later.")
+        return
 
     # Регистрируем пользователя (если его ещё нет)
     try:
@@ -265,6 +267,8 @@ async def cmd_start(message: Message, state: FSMContext):
     except Exception as e:
         logger.error(f"Failed to register user {user_id}: {e}")
         print(f"[API] register user: {e}", flush=True)
+        await message.answer("An error occurred. Please try again later.")
+        return
     
     await message.answer(
         "Здравствуйте! Рады видеть вас в сервисе CHVK City 🚕\n\n"
@@ -274,7 +278,7 @@ async def cmd_start(message: Message, state: FSMContext):
 
 @router.message(F.contact)
 async def process_contact(message: Message):
-    phone = message.contact.phone_number
+    phone = _normalize_phone_digits(message.contact.phone_number or "")
     try:
         await get_http_client().post(
             "/taxi/user/update_phone",
@@ -285,6 +289,8 @@ async def process_contact(message: Message):
         )
     except Exception as e:
         logger.error(f"Failed to update phone for user {message.from_user.id}: {e}")
+        await message.answer("An error occurred. Please try again later.")
+        return
     
     await message.answer(
         f"✅ Номер {phone} подтвержден! Теперь вы можете заказать такси.",
@@ -453,6 +459,8 @@ async def become_driver_handler(message: Message, state: FSMContext):
             return
     except Exception as e:
         logger.error(f"become_driver_handler DB check failed for {telegram_id}: {e}", exc_info=True)
+        await message.answer("An error occurred. Please try again later.")
+        return
     await _start_driver_registration(message, state)
 
 
@@ -505,7 +513,7 @@ async def driver_reg_car_info(message: Message, state: FSMContext):
 
 @router.message(DriverRegistration.waiting_for_phone, F.contact)
 async def driver_reg_phone_contact(message: Message, state: FSMContext):
-    phone = message.contact.phone_number or ""
+    phone = _normalize_phone_digits(message.contact.phone_number or "")
     await _finalize_driver_registration(message, state, phone)
 
 
@@ -531,6 +539,7 @@ async def _finalize_driver_registration(message: Message, state: FSMContext, pho
     print(f"DEBUG DATA: {data}", flush=True)
     full_name = data.get("full_name") or ""
     car_info = data.get("car_info") or ""
+    phone = _normalize_phone_digits(phone)
 
     # Разбиваем "марка госномер" на поля (госномер обычно в конце, буквы/цифры)
     parts = car_info.split()
@@ -581,6 +590,29 @@ async def _finalize_driver_registration(message: Message, state: FSMContext, pho
         "✅ Вы успешно зарегистрированы как водитель!\n"
         "Теперь вы можете выйти на смену через кабинет водителя.",
         reply_markup=menu,
+    )
+
+
+@router.message(F.text == "❌ Уволить водителя")
+async def admin_fire_driver_menu_handler(message: Message):
+    """
+    Кнопка из админского меню: показываем список водителей с кнопками увольнения.
+    """
+    if not _is_owner(message.from_user.id):
+        return
+    await admin_list_drivers(message)
+
+
+@router.message(F.text == "📊 Статистика заказов")
+async def admin_stats_handler(message: Message):
+    """
+    Временный безопасный ответ для кнопки статистики, чтобы она не была "мёртвой".
+    """
+    if not _is_owner(message.from_user.id):
+        return
+    await message.answer(
+        "📊 Статистика заказов пока недоступна в этом интерфейсе.",
+        reply_markup=keyboards.get_admin_menu(),
     )
 
 
