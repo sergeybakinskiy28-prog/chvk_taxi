@@ -326,7 +326,7 @@ async def my_orders_handler(message: Message):
     try:
         user_resp = await get_http_client().get(f"/taxi/user/{telegram_id}")
         if user_resp.status_code != 200:
-    await message.answer(
+            await message.answer(
                 "Вы еще не совершали поездок. Самое время заказать такси! 🚕",
                 reply_markup=await _get_menu_for_user(message.from_user.id),
             )
