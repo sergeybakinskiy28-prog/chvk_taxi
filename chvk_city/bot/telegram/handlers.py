@@ -197,11 +197,31 @@ async def _get_menu_for_user(telegram_id: int) -> ReplyKeyboardMarkup:
         f"DEBUG: Checking menu for {telegram_id}, is_driver={is_driver}, source={source}",
         flush=True,
     )
+    print(f"Sending menu to {telegram_id}", flush=True)
     return keyboards.get_main_menu(
         is_driver=is_driver,
         has_pending_application=has_pending,
         user_id=telegram_id,
     )
+
+
+async def _get_driver_flags(telegram_id: int) -> tuple[bool, bool]:
+    """
+    Возвращает флаги статуса водителя:
+    - is_driver: водитель одобрен
+    - has_pending: заявка создана, но ещё не одобрена
+    """
+    try:
+        async with async_session() as db:
+            driver = await TaxiService.get_driver(db, telegram_id)
+            if not driver:
+                return False, False
+            if driver.is_approved:
+                return True, False
+            return False, True
+    except Exception as e:
+        logger.error(f"Failed to get driver flags for {telegram_id}: {e}", exc_info=True)
+        return False, False
 
 
 def _normalize_phone_digits(phone: str) -> str:
@@ -240,6 +260,14 @@ async def cmd_start(message: Message, state: FSMContext):
         if resp.status_code == 200:
             user_data = resp.json()
             if user_data.get("phone"):
+                is_driver, has_pending = await _get_driver_flags(user_id)
+                if has_pending:
+                    await message.answer(
+                        "🕓 Ваша заявка на водителя находится на рассмотрении.\n"
+                        "Пожалуйста, дождитесь ответа администратора.",
+                        reply_markup=await _get_menu_for_user(message.from_user.id),
+                    )
+                    return
                 # Телефон уже есть — приветствие и главное меню (без перехода в состояние адреса)
                 await message.answer(
                     "Здравствуйте! Рады видеть вас в сервисе CHVK City 🚕\n\n"
@@ -277,8 +305,12 @@ async def cmd_start(message: Message, state: FSMContext):
     )
 
 @router.message(F.contact)
-async def process_contact(message: Message):
+async def process_contact(message: Message, state: FSMContext):
     phone = _normalize_phone_digits(message.contact.phone_number or "")
+    current_state = await state.get_state()
+    if current_state == DriverRegistration.waiting_for_phone.state:
+        await _finalize_driver_registration(message, state, phone)
+        return
     try:
         await get_http_client().post(
             "/taxi/user/update_phone",
@@ -559,8 +591,7 @@ async def _finalize_driver_registration(message: Message, state: FSMContext, pho
         async with async_session() as db:
             await TaxiService.get_or_create_user(db, telegram_id, name=full_name)
             await TaxiService.update_user_phone(db, telegram_id, phone)
-            driver = await TaxiService.register_driver(db, telegram_id, car_model, car_number)
-            await TaxiService.approve_driver(db, driver.id)
+            await TaxiService.register_driver(db, telegram_id, car_model, car_number)
     except Exception as e:
         await message.answer(f"Ошибка сохранения: {e}")
         logger.error(f"Driver registration save error: {e}", exc_info=True)
@@ -571,7 +602,7 @@ async def _finalize_driver_registration(message: Message, state: FSMContext, pho
 
     # Уведомление админу о новом водителе
     admin_text = (
-        f"📋 Новая заявка на водителя (одобрена)\n\n"
+        f"📋 Новая заявка на водителя\n\n"
         f"👤 ФИО: {full_name}\n"
         f"🚗 Авто: {car_info}\n"
         f"📱 Телефон: {phone}\n"
@@ -587,8 +618,8 @@ async def _finalize_driver_registration(message: Message, state: FSMContext, pho
 
     menu = await _get_menu_for_user(telegram_id)
     await message.answer(
-        "✅ Вы успешно зарегистрированы как водитель!\n"
-        "Теперь вы можете выйти на смену через кабинет водителя.",
+        "✅ Ваша заявка отправлена администратору.\n"
+        "Статус: на рассмотрении.",
         reply_markup=menu,
     )
 
