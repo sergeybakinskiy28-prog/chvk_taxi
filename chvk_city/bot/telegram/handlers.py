@@ -68,18 +68,8 @@ async def process_from_address(message: Message, state: FSMContext):
         msg_to_delete=msg_list,
         from_address=from_address,
     )
-    await state.set_state(OrderTaxi.waiting_for_to_address)
     print(f"DEBUG ORDER: saved from_address='{from_address}' for user {message.from_user.id}", flush=True)
-
-    # На шаге ввода адресов не показываем главное меню — только поле ввода
-    sent = await message.answer(
-        "✅ Адрес отправления сохранен.\n\nНапишите адрес улицы и номер дома (куда едем):",
-        reply_markup=ReplyKeyboardRemove(),
-    )
-    data = await state.get_data()
-    msg_list = data.get("msg_to_delete", [])
-    msg_list.append(sent.message_id)
-    await state.update_data(msg_to_delete=msg_list)
+    await _prompt_for_to_address(message, state, message.from_user.id)
 
 
 @router.message(OrderTaxi.waiting_for_to_address, F.text)
@@ -113,26 +103,7 @@ async def process_to_address(message: Message, state: FSMContext):
     msg_list = data.get("msg_to_delete", [])
     msg_list.append(message.message_id)
     await state.update_data(msg_to_delete=msg_list)
-    destination_addresses = data.get("destination_addresses", [])
-    destination_addresses.append(to_address)
-    await state.update_data(
-        destination_addresses=destination_addresses,
-        to_address=" -> ".join(destination_addresses),
-    )
-    print(
-        f"DEBUG ORDER: destination added='{to_address}', route={destination_addresses}, user={message.from_user.id}",
-        flush=True,
-    )
-    sent = await message.answer(
-        "✅ Точка назначения добавлена.\n\n"
-        f"Маршрут: {' -> '.join(destination_addresses)}\n\n"
-        "Добавить ещё адрес или перейти к расчёту стоимости?",
-        reply_markup=keyboards.get_destination_flow_keyboard(),
-    )
-    data = await state.get_data()
-    msg_list = data.get("msg_to_delete", [])
-    msg_list.append(sent.message_id)
-    await state.update_data(msg_to_delete=msg_list)
+    await _save_destination_and_show_options(message, state, to_address, message.from_user.id)
 
 
 @router.message(OrderTaxi.waiting_for_comment, F.text)
@@ -262,6 +233,147 @@ def _get_passenger_state(bot, storage, user_id):
     return FSMContext(storage=storage, key=key)
 
 
+async def _get_recent_addresses(telegram_id: int, address_type: str) -> list[str]:
+    """
+    Возвращает до 5 уникальных недавних адресов пользователя:
+    - address_type == "from" -> адреса отправления
+    - address_type == "to" -> адреса назначения
+    """
+    try:
+        async with async_session() as db:
+            orders = await TaxiService.get_recent_completed_orders(db, telegram_id, limit=10)
+    except Exception as e:
+        logger.error(f"Failed to load recent addresses for {telegram_id}: {e}", exc_info=True)
+        return []
+
+    raw_addresses: list[str] = []
+    for order in orders:
+        value = order.from_address if address_type == "from" else order.to_address
+        value = (value or "").strip()
+        if value:
+            raw_addresses.append(value)
+
+    unique_addresses: list[str] = []
+    seen: set[str] = set()
+    for address in raw_addresses:
+        if address not in seen:
+            seen.add(address)
+            unique_addresses.append(address)
+        if len(unique_addresses) >= 5:
+            break
+    return unique_addresses
+
+
+def _short_address_label(address: str) -> str:
+    address = address.strip()
+    if len(address) <= 32:
+        return address
+    return f"{address[:29]}..."
+
+
+def _build_recent_addresses_keyboard(addresses: list[str], step: str):
+    builder = InlineKeyboardBuilder()
+    prefix = "recent_from" if step == "from" else "recent_to"
+    manual_callback = "manual_from" if step == "from" else "manual_to"
+    icon = "🏠" if step == "from" else "🏢"
+
+    for idx, address in enumerate(addresses):
+        builder.button(
+            text=f"{icon} {_short_address_label(address)}",
+            callback_data=f"{prefix}_{idx}",
+        )
+
+    builder.button(
+        text="⌨️ Ввести адрес вручную",
+        callback_data=manual_callback,
+    )
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+async def _prompt_for_from_address(target_message: Message, state: FSMContext, telegram_id: int):
+    recent_addresses = await _get_recent_addresses(telegram_id, "from")
+    data = await state.get_data()
+    msg_list = data.get("msg_to_delete", [])
+
+    if recent_addresses:
+        sent = await target_message.answer(
+            "Выберите недавний адрес отправления или введите новый вручную:",
+            reply_markup=_build_recent_addresses_keyboard(recent_addresses, "from"),
+        )
+        msg_list.append(sent.message_id)
+        await state.update_data(
+            msg_to_delete=msg_list,
+            recent_from_addresses=recent_addresses,
+        )
+    else:
+        sent = await target_message.answer(
+            "Напишите адрес улицы и номер дома (откуда забрать):",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        msg_list.append(sent.message_id)
+        await state.update_data(
+            msg_to_delete=msg_list,
+            recent_from_addresses=[],
+        )
+
+    await state.set_state(OrderTaxi.waiting_for_from_address)
+
+
+async def _prompt_for_to_address(target_message: Message, state: FSMContext, telegram_id: int):
+    recent_addresses = await _get_recent_addresses(telegram_id, "to")
+    data = await state.get_data()
+    msg_list = data.get("msg_to_delete", [])
+
+    if recent_addresses:
+        sent = await target_message.answer(
+            "Выберите недавний адрес назначения или введите новый вручную:",
+            reply_markup=_build_recent_addresses_keyboard(recent_addresses, "to"),
+        )
+        msg_list.append(sent.message_id)
+        await state.update_data(
+            msg_to_delete=msg_list,
+            recent_to_addresses=recent_addresses,
+        )
+    else:
+        sent = await target_message.answer(
+            "✅ Адрес отправления сохранен.\n\nНапишите адрес улицы и номер дома (куда едем):",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        msg_list.append(sent.message_id)
+        await state.update_data(
+            msg_to_delete=msg_list,
+            recent_to_addresses=[],
+        )
+
+    await state.set_state(OrderTaxi.waiting_for_to_address)
+
+
+async def _save_destination_and_show_options(target_message: Message, state: FSMContext, address: str, user_id: int):
+    data = await state.get_data()
+    msg_list = data.get("msg_to_delete", [])
+    destination_addresses = data.get("destination_addresses", [])
+    destination_addresses.append(address)
+    await state.update_data(
+        destination_addresses=destination_addresses,
+        to_address=" -> ".join(destination_addresses),
+    )
+    print(
+        f"DEBUG ORDER: destination added='{address}', route={destination_addresses}, user={user_id}",
+        flush=True,
+    )
+    from_address = data.get("from_address", "—")
+    sent = await target_message.answer(
+        "📍 Адрес добавлен в маршрут.\n\n"
+        "Ваш маршрут:\n"
+        f"🚕 Откуда: {from_address}\n"
+        f"🏁 Куда: {' -> '.join(destination_addresses)}",
+        reply_markup=keyboards.get_destination_flow_keyboard(),
+    )
+    msg_list.append(sent.message_id)
+    await state.update_data(msg_to_delete=msg_list)
+
+
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
     """
@@ -364,13 +476,6 @@ async def taxi_order_start(message: Message, state: FSMContext):
     # Сохраняем само нажатие "🚕 Заказать такси" (сообщение пользователя)
     msg_list.append(message.message_id)
 
-    sent = await message.answer(
-        "Напишите адрес улицы и номер дома (откуда забрать):",
-        reply_markup=ReplyKeyboardRemove(),
-    )
-
-    # Сохраняем первое сообщение бота и флаг: заказ запущен только с кнопки (защита от дублей)
-    msg_list.append(sent.message_id)
     await state.update_data(
         msg_to_delete=msg_list,
         order_started_by_button=True,
@@ -379,7 +484,7 @@ async def taxi_order_start(message: Message, state: FSMContext):
         to_address=None,
         is_processing=False,
     )
-    await state.set_state(OrderTaxi.waiting_for_from_address)
+    await _prompt_for_from_address(message, state, message.from_user.id)
 
 
 @router.message(F.text == "🗂 Мои заказы")
@@ -1112,6 +1217,84 @@ async def back_to_menu_callback(callback: CallbackQuery, state: FSMContext):
     )
 
 
+@router.callback_query(F.data == "manual_from", OrderTaxi.waiting_for_from_address)
+async def manual_from_callback(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    sent = await callback.message.answer(
+        "Напишите адрес улицы и номер дома (откуда забрать):",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+    data = await state.get_data()
+    msg_list = data.get("msg_to_delete", [])
+    msg_list.append(sent.message_id)
+    await state.update_data(msg_to_delete=msg_list)
+
+
+@router.callback_query(F.data == "manual_to", OrderTaxi.waiting_for_to_address)
+async def manual_to_callback(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    sent = await callback.message.answer(
+        "Напишите адрес улицы и номер дома (куда едем):",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+    data = await state.get_data()
+    msg_list = data.get("msg_to_delete", [])
+    msg_list.append(sent.message_id)
+    await state.update_data(msg_to_delete=msg_list)
+
+
+@router.callback_query(F.data.startswith("recent_from_"), OrderTaxi.waiting_for_from_address)
+async def recent_from_callback(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    recent_addresses = data.get("recent_from_addresses", [])
+    idx = int(callback.data.split("_")[-1])
+    if idx < 0 or idx >= len(recent_addresses):
+        await callback.answer("Адрес больше недоступен. Выберите заново.", show_alert=True)
+        return
+    from_address = recent_addresses[idx]
+    await callback.answer()
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    msg_list = data.get("msg_to_delete", [])
+    msg_list.append(callback.message.message_id)
+    await state.update_data(
+        msg_to_delete=msg_list,
+        from_address=from_address,
+    )
+    print(f"DEBUG ORDER: selected recent from_address='{from_address}' for user {callback.from_user.id}", flush=True)
+    await _prompt_for_to_address(callback.message, state, callback.from_user.id)
+
+
+@router.callback_query(F.data.startswith("recent_to_"), OrderTaxi.waiting_for_to_address)
+async def recent_to_callback(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    recent_addresses = data.get("recent_to_addresses", [])
+    idx = int(callback.data.split("_")[-1])
+    if idx < 0 or idx >= len(recent_addresses):
+        await callback.answer("Адрес больше недоступен. Выберите заново.", show_alert=True)
+        return
+    to_address = recent_addresses[idx]
+    await callback.answer()
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    msg_list = data.get("msg_to_delete", [])
+    msg_list.append(callback.message.message_id)
+    await state.update_data(msg_to_delete=msg_list)
+    await _save_destination_and_show_options(callback.message, state, to_address, callback.from_user.id)
+
+
 @router.callback_query(F.data == "skip_comment", OrderTaxi.waiting_for_comment)
 async def process_skip_comment(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
@@ -1122,8 +1305,8 @@ async def process_skip_comment(callback: CallbackQuery, state: FSMContext):
     await finalize_order(callback.message, state, comment=None)
 
 
-@router.callback_query(F.data == "add_more_destination", OrderTaxi.waiting_for_to_address)
-async def add_more_destination_callback(callback: CallbackQuery, state: FSMContext):
+@router.callback_query(F.data == "add_more_address", OrderTaxi.waiting_for_to_address)
+async def add_more_address_callback(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     try:
         await callback.message.edit_reply_markup(reply_markup=None)
@@ -1139,8 +1322,8 @@ async def add_more_destination_callback(callback: CallbackQuery, state: FSMConte
     await state.update_data(msg_to_delete=msg_list)
 
 
-@router.callback_query(F.data == "calculate_route_price", OrderTaxi.waiting_for_to_address)
-async def calculate_route_price_callback(callback: CallbackQuery, state: FSMContext):
+@router.callback_query(F.data == "finish_route", OrderTaxi.waiting_for_to_address)
+async def finish_route_callback(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     destination_addresses = data.get("destination_addresses", [])
     if not destination_addresses:
@@ -2025,29 +2208,22 @@ async def start_new_order_callback(callback: CallbackQuery, state: FSMContext):
     except Exception:
         pass
 
-    # Шаг 2: отправляем новое сообщение для ввода адреса
-    try:
-        prompt = await callback.message.answer(
-            "Отлично! Начинаем новый заказ. 🚕\n\n"
-            "Напишите адрес улицы и номер дома (откуда забрать):",
-            reply_markup=ReplyKeyboardRemove(),
-        )
-    except Exception as e:
-        logger.exception(f"Error sending new order prompt: {e}")
-        await callback.answer("Произошла ошибка, попробуйте ещё раз.", show_alert=True)
-        return
-
-    # Шаг 3: переводим в состояние ожидания адреса 'откуда'
-    await state.set_state(OrderTaxi.waiting_for_from_address)
-    # Помечаем, что заказ запущен из управляемой точки (кнопка), и начинаем новый список сообщений на удаление
+    # Шаг 2: помечаем новый заказ и показываем recent/manual адреса отправления
     await state.update_data(
         order_started_by_button=True,
         is_processing=False,
-        msg_to_delete=[prompt.message_id],
+        msg_to_delete=[],
         destination_addresses=[],
         from_address=None,
         to_address=None,
     )
+    try:
+        await callback.message.answer("Отлично! Начинаем новый заказ. 🚕")
+        await _prompt_for_from_address(callback.message, state, callback.from_user.id)
+    except Exception as e:
+        logger.exception(f"Error sending new order prompt: {e}")
+        await callback.answer("Произошла ошибка, попробуйте ещё раз.", show_alert=True)
+        return
 
 @router.callback_query(F.data.startswith("rate_"))
 async def rate_trip_callback(callback: CallbackQuery):

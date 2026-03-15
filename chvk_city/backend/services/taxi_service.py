@@ -89,6 +89,25 @@ class TaxiService:
             
         result = await db.execute(select(Order).where(Order.user_id == user.id).order_by(Order.created_at.desc()))
         return list(result.scalars().all())
+
+    @staticmethod
+    async def get_recent_completed_orders(
+        db: AsyncSession,
+        telegram_id: int,
+        limit: int = 5,
+    ) -> List[Order]:
+        user_result = await db.execute(select(User).where(User.telegram_id == telegram_id))
+        user = user_result.scalar_one_or_none()
+        if not user:
+            return []
+
+        result = await db.execute(
+            select(Order)
+            .where(Order.user_id == user.id, Order.status == "completed")
+            .order_by(Order.created_at.desc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())
     @staticmethod
     async def get_driver(db: AsyncSession, telegram_id: int) -> Driver | None:
         result = await db.execute(

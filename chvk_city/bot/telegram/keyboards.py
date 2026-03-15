@@ -243,8 +243,8 @@ def get_skip_comment_keyboard():
 
 def get_destination_flow_keyboard():
     buttons = [
-        [InlineKeyboardButton(text="➕ Добавить еще адрес", callback_data="add_more_destination")],
-        [InlineKeyboardButton(text="✅ Посчитать стоимость", callback_data="calculate_route_price")],
+        [InlineKeyboardButton(text="➕ Добавить еще остановку", callback_data="add_more_address")],
+        [InlineKeyboardButton(text="🏁 Завершить маршрут", callback_data="finish_route")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
