@@ -27,9 +27,11 @@ class OrderTaxi(StatesGroup):
     waiting_for_to_address = State()
     waiting_for_comment = State()
 
-class RegisterDriver(StatesGroup):
-    waiting_for_car_model = State()
-    waiting_for_car_number = State()
+class DriverRegistration(StatesGroup):
+    """Пошаговый опрос для регистрации водителя."""
+    waiting_for_full_name = State()
+    waiting_for_car_info = State()
+    waiting_for_phone = State()
 
 
 class DriverShift(StatesGroup):
@@ -47,6 +49,7 @@ async def process_from_address(message: Message, state: FSMContext):
         "🗂 Мои заказы",
         "📞 Поддержка",
         "💼 Кабинет водителя",
+        "🚗 Стать водителем",
         "⚙️ Админка",
         "💎 УПРАВЛЕНИЕ",
     }:
@@ -78,7 +81,7 @@ async def process_to_address(message: Message, state: FSMContext):
         await state.clear()
         await message.answer(
             "Сессия сброшена. Нажмите «🚕 Заказать такси» для нового заказа.",
-            reply_markup=keyboards.get_main_menu(message.from_user.id),
+            reply_markup=await _get_menu_for_user(message.from_user.id),
         )
         return
 
@@ -88,6 +91,7 @@ async def process_to_address(message: Message, state: FSMContext):
         "🗂 Мои заказы",
         "📞 Поддержка",
         "💼 Кабинет водителя",
+        "🚗 Стать водителем",
         "⚙️ Админка",
         "💎 УПРАВЛЕНИЕ",
     }:
@@ -118,7 +122,7 @@ async def process_comment(message: Message, state: FSMContext):
         await state.clear()
         await message.answer(
             "Сессия сброшена. Нажмите «🚕 Заказать такси» для нового заказа.",
-            reply_markup=keyboards.get_main_menu(message.from_user.id),
+            reply_markup=await _get_menu_for_user(message.from_user.id),
         )
         return
 
@@ -128,6 +132,7 @@ async def process_comment(message: Message, state: FSMContext):
         "🗂 Мои заказы",
         "📞 Поддержка",
         "💼 Кабинет водителя",
+        "🚗 Стать водителем",
         "⚙️ Админка",
         "💎 УПРАВЛЕНИЕ",
     }:
@@ -159,6 +164,26 @@ def get_http_client() -> httpx.AsyncClient:
         init_http_client()
     return _http_client
 
+
+async def _get_menu_for_user(telegram_id: int) -> ReplyKeyboardMarkup:
+    """
+    Возвращает главное меню в зависимости от статуса пользователя:
+    - is_driver (одобрен) → меню с «Кабинет водителя»
+    - has_pending_application → меню без «Стать водителем»
+    - иначе → меню с «Стать водителем»
+    """
+    try:
+        resp = await get_http_client().get(f"/taxi/driver/by_telegram/{telegram_id}")
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("is_approved"):
+                return keyboards.get_main_menu(is_driver=True, has_pending_application=False, user_id=telegram_id)
+            return keyboards.get_main_menu(is_driver=False, has_pending_application=True, user_id=telegram_id)
+    except Exception:
+        pass
+    return keyboards.get_main_menu(is_driver=False, has_pending_application=False, user_id=telegram_id)
+
+
 def _get_passenger_state(bot, storage, user_id):
     key = StorageKey(
         bot_id=bot.id,
@@ -189,7 +214,7 @@ async def cmd_start(message: Message, state: FSMContext):
                     "Здравствуйте! Рады видеть вас в сервисе CHVK City 🚕\n\n"
                     "Здесь вы можете быстро заказать такси, посмотреть историю своих поездок или связаться с поддержкой.\n\n"
                     "Для заказа нажмите кнопку ниже 👇",
-        reply_markup=keyboards.get_main_menu(message.from_user.id),
+        reply_markup=await _get_menu_for_user(message.from_user.id),
                 )
                 return
         # Если 404 или нет телефона — продолжаем обычный флоу
@@ -232,7 +257,7 @@ async def process_contact(message: Message):
     
     await message.answer(
         f"✅ Номер {phone} подтвержден! Теперь вы можете заказать такси.",
-        reply_markup=keyboards.get_main_menu(message.from_user.id)
+        reply_markup=await _get_menu_for_user(message.from_user.id)
     )
 
 @router.message(F.text == "🚕 Заказать такси")
@@ -272,7 +297,7 @@ async def my_orders_handler(message: Message):
         if user_resp.status_code != 200:
             await message.answer(
                 "Вы еще не совершали поездок. Самое время заказать такси! 🚕",
-                reply_markup=keyboards.get_main_menu(message.from_user.id),
+                reply_markup=await _get_menu_for_user(message.from_user.id),
             )
             return
         user_data = user_resp.json()
@@ -280,7 +305,7 @@ async def my_orders_handler(message: Message):
         if not user_id:
             await message.answer(
                 "Вы еще не совершали поездок. Самое время заказать такси! 🚕",
-                reply_markup=keyboards.get_main_menu(message.from_user.id),
+                reply_markup=await _get_menu_for_user(message.from_user.id),
             )
             return
 
@@ -288,7 +313,7 @@ async def my_orders_handler(message: Message):
         if history_resp.status_code != 200:
             await message.answer(
                 "Не удалось загрузить историю заказов. Попробуйте позже.",
-                reply_markup=keyboards.get_main_menu(message.from_user.id),
+                reply_markup=await _get_menu_for_user(message.from_user.id),
             )
             return
 
@@ -296,7 +321,7 @@ async def my_orders_handler(message: Message):
         if not orders:
             await message.answer(
                 "Вы еще не совершали поездок. Самое время заказать такси! 🚕",
-                reply_markup=keyboards.get_main_menu(message.from_user.id),
+                reply_markup=await _get_menu_for_user(message.from_user.id),
             )
             return
 
@@ -325,7 +350,7 @@ async def my_orders_handler(message: Message):
         logger.exception(f"Error loading order history for {telegram_id}: {e}")
         await message.answer(
             "Не удалось загрузить историю заказов. Попробуйте позже.",
-            reply_markup=keyboards.get_main_menu(message.from_user.id),
+            reply_markup=await _get_menu_for_user(message.from_user.id),
         )
 
 
@@ -334,17 +359,17 @@ async def support_handler(message: Message):
     """Кнопка «Поддержка» — краткая информация и меню."""
     await message.answer(
         "📞 Поддержка CHVK City\n\nПо вопросам заказа и работы сервиса обращайтесь к администратору.",
-        reply_markup=keyboards.get_main_menu(message.from_user.id),
+        reply_markup=await _get_menu_for_user(message.from_user.id),
     )
 
 
 @router.message(Command("driver"))
-@router.message(F.text == "💼 Кабинет водителя")
-async def driver_cabinet_handler(message: Message):
+async def cmd_driver_handler(message: Message, state: FSMContext):
     """
-    Личный кабинет водителя.
-    Если водитель не зарегистрирован — предлагаем заполнить анкету.
-    Если зарегистрирован и одобрен — показываем меню водителя.
+    Команда /driver (кнопка «Стать водителем» в меню):
+    - если водитель одобрен → кабинет водителя;
+    - если заявка на рассмотрении → сообщение ожидания;
+    - иначе → запуск опроса регистрации.
     """
     telegram_id = message.from_user.id
     try:
@@ -352,33 +377,223 @@ async def driver_cabinet_handler(message: Message):
     except Exception as e:
         logger.error(f"Failed to fetch driver by telegram_id={telegram_id}: {e}")
         await message.answer(
-            "❌ Временно недоступно. Попробуйте позже или свяжитесь с администратором.",
-            reply_markup=keyboards.get_main_menu(message.from_user.id),
+            "❌ Временно недоступно. Попробуйте позже.",
+            reply_markup=await _get_menu_for_user(telegram_id),
+        )
+        return
+
+    if resp.status_code == 200:
+        data = resp.json()
+        if data.get("is_approved"):
+            await message.answer(
+                "💼 Кабинет водителя\n\n"
+                "Здесь вы можете выйти на смену или приостановить приём заказов.",
+                reply_markup=keyboards.get_driver_menu(),
+            )
+            return
+        await message.answer(
+            "🕓 Ваша заявка на рассмотрении.\n"
+            "Пожалуйста, дождитесь одобрения.",
+            reply_markup=await _get_menu_for_user(telegram_id),
         )
         return
 
     if resp.status_code == 404:
+        await _start_driver_registration(message, state)
+        return
+
+    await message.answer(
+        "❌ Не удалось получить данные. Попробуйте позже.",
+        reply_markup=await _get_menu_for_user(telegram_id),
+    )
+
+
+@router.message(F.text == "🚗 Стать водителем")
+async def become_driver_handler(message: Message, state: FSMContext):
+    """Кнопка «Стать водителем» — запуск пошагового опроса регистрации."""
+    telegram_id = message.from_user.id
+    try:
+        resp = await get_http_client().get(f"/taxi/driver/by_telegram/{telegram_id}")
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("is_approved"):
+                await message.answer(
+                    "Вы уже одобренный водитель. Откройте кабинет.",
+                    reply_markup=await _get_menu_for_user(telegram_id),
+                )
+                return
+            await message.answer(
+                "🕓 Ваша заявка уже на рассмотрении. Дождитесь одобрения.",
+                reply_markup=await _get_menu_for_user(telegram_id),
+                )
+            return
+    except Exception:
+        pass
+    await _start_driver_registration(message, state)
+
+
+async def _start_driver_registration(message: Message, state: FSMContext):
+    """Начать FSM-опрос регистрации водителя."""
+    await state.clear()
+    await state.set_state(DriverRegistration.waiting_for_full_name)
+    await message.answer(
+        "🚗 Регистрация водителя\n\n"
+        "Шаг 1 из 3. Укажите ваше ФИО полностью:",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+
+
+@router.message(DriverRegistration.waiting_for_full_name, F.text)
+async def driver_reg_full_name(message: Message, state: FSMContext):
+    if message.text in {"🚕 Заказать такси", "🗂 Мои заказы", "📞 Поддержка", "🚗 Стать водителем", "💎 УПРАВЛЕНИЕ"}:
+        await state.clear()
+        await message.answer("Регистрация отменена.", reply_markup=await _get_menu_for_user(message.from_user.id))
+        return
+    if not message.text or len(message.text.strip()) < 3:
+        await message.answer("Пожалуйста, введите ФИО (полностью, минимум 3 символа).")
+        return
+    await state.update_data(full_name=message.text.strip())
+    await state.set_state(DriverRegistration.waiting_for_car_info)
+    await message.answer(
+        "Шаг 2 из 3. Укажите марку автомобиля и госномер.\n"
+        "Например: Toyota Camry А123BC777",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+
+
+@router.message(DriverRegistration.waiting_for_car_info, F.text)
+async def driver_reg_car_info(message: Message, state: FSMContext):
+    if message.text in {"🚕 Заказать такси", "🗂 Мои заказы", "📞 Поддержка", "🚗 Стать водителем", "💎 УПРАВЛЕНИЕ"}:
+        await state.clear()
+        await message.answer("Регистрация отменена.", reply_markup=await _get_menu_for_user(message.from_user.id))
+        return
+    if not message.text or len(message.text.strip()) < 5:
+        await message.answer("Пожалуйста, укажите марку и госномер автомобиля.")
+        return
+    await state.update_data(car_info=message.text.strip())
+    await state.set_state(DriverRegistration.waiting_for_phone)
+    await message.answer(
+        "Шаг 3 из 3. Отправьте номер телефона для связи.\n"
+        "Нажмите кнопку ниже или введите номер вручную:",
+        reply_markup=keyboards.get_phone_keyboard(),
+    )
+
+
+@router.message(DriverRegistration.waiting_for_phone, F.contact)
+async def driver_reg_phone_contact(message: Message, state: FSMContext):
+    phone = message.contact.phone_number or ""
+    await _finalize_driver_registration(message, state, phone)
+
+
+@router.message(DriverRegistration.waiting_for_phone, F.text)
+async def driver_reg_phone_text(message: Message, state: FSMContext):
+    if message.text and message.text.strip():
+        phone = message.text.strip()
+        if any(c.isdigit() for c in phone) and len(phone) >= 10:
+            await _finalize_driver_registration(message, state, phone)
+            return
+    await message.answer("Пожалуйста, введите корректный номер телефона (минимум 10 цифр).")
+
+
+async def _finalize_driver_registration(message: Message, state: FSMContext, phone: str):
+    """Отправить заявку админу, сохранить в БД, сообщить пользователю."""
+    data = await state.get_data()
+    full_name = data.get("full_name") or ""
+    car_info = data.get("car_info") or ""
+    telegram_id = message.from_user.id
+
+    # Разбиваем "марка госномер" на поля (госномер обычно в конце, буквы/цифры)
+    parts = car_info.split()
+    car_model = car_info
+    car_number = ""
+    if len(parts) >= 2:
+        last = parts[-1]
+        if len(last) >= 5 and any(c.isdigit() for c in last):
+            car_number = last
+            car_model = " ".join(parts[:-1])
+    if not car_number:
+        car_number = car_info
+        car_model = car_info
+
+    try:
+        await get_http_client().post(
+            "/taxi/user/register",
+            json={"telegram_id": telegram_id, "name": full_name},
+        )
+        await get_http_client().post(
+            "/taxi/user/update_phone",
+            json={"telegram_id": telegram_id, "phone": phone},
+        )
+        await get_http_client().post(
+            "/taxi/driver/register",
+            json={
+                "telegram_id": telegram_id,
+                "car_model": car_model,
+                "car_number": car_number,
+            },
+        )
+    except Exception as e:
+        logger.error(f"Driver registration API error: {e}")
+        await state.clear()
         await message.answer(
-            "🚗 Вы ещё не зарегистрированы как водитель.\n\n"
-            "Если хотите работать в CHVK City, отправьте администратору данные:\n"
-            "— Имя\n— Марка и модель авто\n— Госномер\n— Телефон для связи",
-            reply_markup=keyboards.get_main_menu(message.from_user.id),
+            "❌ Ошибка при отправке заявки. Попробуйте позже.",
+            reply_markup=await _get_menu_for_user(telegram_id),
+        )
+        return
+
+    # Отправка заявки админу
+    admin_text = (
+        f"📋 Новая заявка на водителя\n\n"
+        f"👤 ФИО: {full_name}\n"
+        f"🚗 Авто: {car_info}\n"
+        f"📱 Телефон: {phone}\n"
+        f"🆔 Telegram ID: {telegram_id}"
+    )
+    try:
+        await message.bot.send_message(
+            chat_id=settings.ADMIN_CHAT_ID,
+            text=admin_text,
+        )
+    except Exception as e:
+        logger.error(f"Failed to send driver application to admin: {e}")
+
+    await state.clear()
+    await message.answer(
+        "✅ Ваша заявка на рассмотрении.\n"
+        "После одобрения администратором здесь появится кабинет водителя.",
+        reply_markup=await _get_menu_for_user(telegram_id),
+    )
+
+
+@router.message(F.text == "💼 Кабинет водителя")
+async def driver_cabinet_handler(message: Message):
+    """
+    Личный кабинет водителя (только для одобренных водителей).
+    Кнопка видна только при is_driver=True.
+    """
+    telegram_id = message.from_user.id
+    try:
+        resp = await get_http_client().get(f"/taxi/driver/by_telegram/{telegram_id}")
+    except Exception as e:
+        logger.error(f"Failed to fetch driver by telegram_id={telegram_id}: {e}")
+        await message.answer(
+            "❌ Временно недоступно. Попробуйте позже.",
+            reply_markup=await _get_menu_for_user(telegram_id),
         )
         return
 
     if resp.status_code != 200:
         await message.answer(
-            "❌ Не удалось получить данные водителя. Попробуйте позже.",
-            reply_markup=keyboards.get_main_menu(message.from_user.id),
+            "❌ Не удалось получить данные водителя.",
+            reply_markup=await _get_menu_for_user(telegram_id),
         )
         return
 
     data = resp.json()
     if not data.get("is_approved"):
         await message.answer(
-            "🕓 Ваша анкета водителя отправлена администратору.\n"
-            "Пожалуйста, дождитесь одобрения. После этого здесь откроется меню смены.",
-            reply_markup=keyboards.get_main_menu(message.from_user.id),
+            "🕓 Ваша заявка на рассмотрении. Дождитесь одобрения.",
+            reply_markup=await _get_menu_for_user(telegram_id),
         )
         return
 
@@ -398,7 +613,7 @@ async def admin_panel_handler(message: Message):
         # Молча игнорируем или можно вернуть основное меню
         await message.answer(
             "⚠️ У вас нет доступа к админ-панели.",
-            reply_markup=keyboards.get_main_menu(message.from_user.id),
+            reply_markup=await _get_menu_for_user(message.from_user.id),
         )
         return
 
@@ -416,7 +631,7 @@ async def owner_panel_handler(message: Message):
     if not _is_owner(message.from_user.id):
         await message.answer(
             "⚠️ У вас нет доступа к панели владельца.",
-            reply_markup=keyboards.get_main_menu(message.from_user.id),
+            reply_markup=await _get_menu_for_user(message.from_user.id),
         )
         return
 
@@ -535,7 +750,7 @@ async def owner_back_to_menu(message: Message, state: FSMContext):
     await state.clear()
     await message.answer(
         "Главное меню:",
-        reply_markup=keyboards.get_main_menu(message.from_user.id),
+        reply_markup=await _get_menu_for_user(message.from_user.id),
     )
 
 
@@ -783,7 +998,7 @@ async def back_to_menu_callback(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     await callback.message.answer(
         "Главное меню. Выберите действие:",
-        reply_markup=keyboards.get_main_menu(callback.from_user.id),
+        reply_markup=await _get_menu_for_user(callback.from_user.id),
     )
 
 
@@ -815,7 +1030,7 @@ async def finalize_order(message: Message, state: FSMContext, comment: str | Non
         await state.clear()
         await message.answer(
             "Пожалуйста, используйте кнопку «🚕 Заказать такси» в меню для оформления заказа.",
-            reply_markup=keyboards.get_main_menu(message.from_user.id),
+            reply_markup=await _get_menu_for_user(message.from_user.id),
         )
         return
 
@@ -1752,6 +1967,7 @@ _ADMIN_SAFE_TEXTS = {
     "🗂 Мои заказы",
     "📞 Поддержка",
     "💼 Кабинет водителя",
+    "🚗 Стать водителем",
     "⚙️ Админка",
     "💎 УПРАВЛЕНИЕ",
     "👥 Водители в штате",

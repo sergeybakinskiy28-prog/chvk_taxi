@@ -3,14 +3,20 @@ import urllib.parse
 
 from chvk_city.bot.telegram.constants import OWNER_ID
 
-def get_main_menu(user_id: int | None = None):
+
+def get_user_menu(show_become_driver: bool = True, is_owner: bool = False) -> ReplyKeyboardMarkup:
+    """
+    Меню обычного пользователя (пассажира).
+    show_become_driver: показывать кнопку «Стать водителем» (скрыть после подачи заявки).
+    """
     buttons = [
         [KeyboardButton(text="🚕 Заказать такси")],
         [KeyboardButton(text="🗂 Мои заказы")],
         [KeyboardButton(text="📞 Поддержка")],
-        [KeyboardButton(text="💼 Кабинет водителя")],
     ]
-    if user_id == OWNER_ID:
+    if show_become_driver:
+        buttons.append([KeyboardButton(text="🚗 Стать водителем")])
+    if is_owner:
         buttons.append([KeyboardButton(text="💎 УПРАВЛЕНИЕ")])
     return ReplyKeyboardMarkup(
         keyboard=buttons,
@@ -18,6 +24,38 @@ def get_main_menu(user_id: int | None = None):
         is_persistent=True,
         input_field_placeholder="УПРАВЛЕНИЕ КНОПКАМИ 👇",
     )
+
+
+def get_driver_main_menu(is_owner: bool = False) -> ReplyKeyboardMarkup:
+    """
+    Главное меню водителя: те же кнопки + «Кабинет водителя» вместо «Стать водителем».
+    """
+    buttons = [
+        [KeyboardButton(text="🚕 Заказать такси")],
+        [KeyboardButton(text="🗂 Мои заказы")],
+        [KeyboardButton(text="📞 Поддержка")],
+        [KeyboardButton(text="💼 Кабинет водителя")],
+    ]
+    if is_owner:
+        buttons.append([KeyboardButton(text="💎 УПРАВЛЕНИЕ")])
+    return ReplyKeyboardMarkup(
+        keyboard=buttons,
+        resize_keyboard=True,
+        is_persistent=True,
+        input_field_placeholder="УПРАВЛЕНИЕ КНОПКАМИ 👇",
+    )
+
+
+def get_main_menu(is_driver: bool, has_pending_application: bool, user_id: int | None = None) -> ReplyKeyboardMarkup:
+    """
+    Универсальная функция для получения главного меню.
+    is_driver: True — одобренный водитель (показать «Кабинет водителя»).
+    has_pending_application: True — заявка на рассмотрении (скрыть «Стать водителем»).
+    """
+    is_owner = user_id == OWNER_ID if user_id else False
+    if is_driver:
+        return get_driver_main_menu(is_owner=is_owner)
+    return get_user_menu(show_become_driver=not has_pending_application, is_owner=is_owner)
 
 
 def get_driver_menu():
