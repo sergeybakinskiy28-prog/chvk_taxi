@@ -9,7 +9,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from chvk_city.backend.config import settings
-from chvk_city.backend.database.db import async_session
+from chvk_city.backend.database.session import async_session
 from chvk_city.backend.services.taxi_service import TaxiService
 from chvk_city.bot.telegram import keyboards
 from chvk_city.bot.telegram.constants import OWNER_ID
@@ -245,7 +245,7 @@ async def cmd_start(message: Message, state: FSMContext):
                     "Здравствуйте! Рады видеть вас в сервисе CHVK City 🚕\n\n"
                     "Здесь вы можете быстро заказать такси, посмотреть историю своих поездок или связаться с поддержкой.\n\n"
                     "Для заказа нажмите кнопку ниже 👇",
-        reply_markup=await _get_menu_for_user(message.from_user.id),
+                    reply_markup=await _get_menu_for_user(message.from_user.id),
                 )
                 return
         # Если 404 или нет телефона — продолжаем обычный флоу
@@ -404,18 +404,18 @@ async def cmd_driver_handler(message: Message, state: FSMContext):
     """
     telegram_id = message.from_user.id
     try:
-        resp = await get_http_client().get(f"/taxi/driver/by_telegram/{telegram_id}")
+        async with async_session() as db:
+            driver = await TaxiService.get_driver(db, telegram_id)
     except Exception as e:
-        logger.error(f"Failed to fetch driver by telegram_id={telegram_id}: {e}")
+        logger.error(f"Failed to load driver {telegram_id}: {e}", exc_info=True)
         await message.answer(
             "❌ Временно недоступно. Попробуйте позже.",
             reply_markup=await _get_menu_for_user(telegram_id),
         )
         return
 
-    if resp.status_code == 200:
-        data = resp.json()
-        if data.get("is_approved"):
+    if driver:
+        if driver.is_approved:
             await message.answer(
                 "💼 Кабинет водителя\n\n"
                 "Здесь вы можете выйти на смену или приостановить приём заказов.",
@@ -429,14 +429,7 @@ async def cmd_driver_handler(message: Message, state: FSMContext):
         )
         return
 
-    if resp.status_code == 404:
-        await _start_driver_registration(message, state)
-        return
-
-    await message.answer(
-        "❌ Не удалось получить данные. Попробуйте позже.",
-        reply_markup=await _get_menu_for_user(telegram_id),
-    )
+    await _start_driver_registration(message, state)
 
 
 @router.message(F.text == "🚗 Стать водителем")
@@ -444,10 +437,10 @@ async def become_driver_handler(message: Message, state: FSMContext):
     """Кнопка «Стать водителем» — запуск пошагового опроса регистрации."""
     telegram_id = message.from_user.id
     try:
-        resp = await get_http_client().get(f"/taxi/driver/by_telegram/{telegram_id}")
-        if resp.status_code == 200:
-            data = resp.json()
-            if data.get("is_approved"):
+        async with async_session() as db:
+            driver = await TaxiService.get_driver(db, telegram_id)
+        if driver:
+            if driver.is_approved:
                 await message.answer(
                     "Вы уже одобренный водитель. Откройте кабинет.",
                     reply_markup=await _get_menu_for_user(telegram_id),
@@ -459,7 +452,7 @@ async def become_driver_handler(message: Message, state: FSMContext):
                 )
             return
     except Exception as e:
-        logger.error(f"become_driver_handler API check failed for {telegram_id}: {e}", exc_info=True)
+        logger.error(f"become_driver_handler DB check failed for {telegram_id}: {e}", exc_info=True)
     await _start_driver_registration(message, state)
 
 
@@ -555,6 +548,7 @@ async def _finalize_driver_registration(message: Message, state: FSMContext, pho
     # Прямая запись в БД через TaxiService
     try:
         async with async_session() as db:
+            await TaxiService.get_or_create_user(db, telegram_id, name=full_name)
             await TaxiService.update_user_phone(db, telegram_id, phone)
             driver = await TaxiService.register_driver(db, telegram_id, car_model, car_number)
             await TaxiService.approve_driver(db, driver.id)
@@ -598,24 +592,24 @@ async def driver_cabinet_handler(message: Message):
     """
     telegram_id = message.from_user.id
     try:
-        resp = await get_http_client().get(f"/taxi/driver/by_telegram/{telegram_id}")
+        async with async_session() as db:
+            driver = await TaxiService.get_driver(db, telegram_id)
     except Exception as e:
-        logger.error(f"Failed to fetch driver by telegram_id={telegram_id}: {e}")
+        logger.error(f"Failed to load driver cabinet for {telegram_id}: {e}", exc_info=True)
         await message.answer(
             "❌ Временно недоступно. Попробуйте позже.",
             reply_markup=await _get_menu_for_user(telegram_id),
         )
         return
 
-    if resp.status_code != 200:
+    if not driver:
         await message.answer(
             "❌ Не удалось получить данные водителя.",
             reply_markup=await _get_menu_for_user(telegram_id),
         )
         return
 
-    data = resp.json()
-    if not data.get("is_approved"):
+    if not driver.is_approved:
         await message.answer(
             "🕓 Ваша заявка на рассмотрении. Дождитесь одобрения.",
             reply_markup=await _get_menu_for_user(telegram_id),
