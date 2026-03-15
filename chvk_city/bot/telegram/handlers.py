@@ -9,6 +9,8 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from chvk_city.backend.config import settings
+from chvk_city.backend.database.db import async_session
+from chvk_city.backend.services.taxi_service import TaxiService
 from chvk_city.bot.telegram import keyboards
 from chvk_city.bot.telegram.constants import OWNER_ID
 
@@ -167,21 +169,39 @@ def get_http_client() -> httpx.AsyncClient:
 
 async def _get_menu_for_user(telegram_id: int) -> ReplyKeyboardMarkup:
     """
-    Возвращает главное меню в зависимости от статуса пользователя:
+    Возвращает главное меню в зависимости от статуса пользователя.
+    Проверка идёт по БД: сначала API, при неудаче — прямое чтение через SQLAlchemy.
     - is_driver (одобрен) → меню с «Кабинет водителя»
     - has_pending_application → меню без «Стать водителем»
     - иначе → меню с «Стать водителем»
     """
+    is_driver = False
+    has_pending = False
+
     try:
         resp = await get_http_client().get(f"/taxi/driver/by_telegram/{telegram_id}")
         if resp.status_code == 200:
             data = resp.json()
             is_approved = data.get("is_approved")
             if is_approved in (True, "true", 1):
-                return keyboards.get_main_menu(is_driver=True, has_pending_application=False, user_id=telegram_id)
-            return keyboards.get_main_menu(is_driver=False, has_pending_application=True, user_id=telegram_id)
-    except Exception:
-        pass
+                is_driver = True
+            else:
+                has_pending = True
+            return keyboards.get_main_menu(is_driver=is_driver, has_pending_application=has_pending, user_id=telegram_id)
+    except Exception as e:
+        logger.debug(f"API driver check failed for {telegram_id}: {e}")
+
+    try:
+        async with async_session() as db:
+            driver = await TaxiService.get_driver(db, telegram_id)
+            if driver:
+                if driver.is_approved:
+                    is_driver = True
+                else:
+                    has_pending = True
+        return keyboards.get_main_menu(is_driver=is_driver, has_pending_application=has_pending, user_id=telegram_id)
+    except Exception as e:
+        logger.debug(f"DB driver check failed for {telegram_id}: {e}")
     return keyboards.get_main_menu(is_driver=False, has_pending_application=False, user_id=telegram_id)
 
 
@@ -530,34 +550,22 @@ async def _finalize_driver_registration(message: Message, state: FSMContext, pho
         car_number = car_info
         car_model = car_info
 
+    # Сохранение в БД: используем SQLAlchemy напрямую, чтобы гарантировать запись
+    saved = False
     try:
-        await get_http_client().post(
-            "/taxi/user/register",
-            json={"telegram_id": telegram_id, "name": full_name},
-        )
-        await get_http_client().post(
-            "/taxi/user/update_phone",
-            json={"telegram_id": telegram_id, "phone": phone},
-        )
-        reg_resp = await get_http_client().post(
-            "/taxi/driver/register",
-            json={
-                "telegram_id": telegram_id,
-                "car_model": car_model,
-                "car_number": car_number,
-            },
-        )
-        if reg_resp.status_code != 200:
-            raise Exception(f"register returned {reg_resp.status_code}")
-        reg_data = reg_resp.json()
-        driver_id = reg_data.get("driver_id")
-        if driver_id is not None:
-            await get_http_client().post(f"/taxi/driver/{driver_id}/approve")
+        async with async_session() as db:
+            user = await TaxiService.get_or_create_user(db, telegram_id, name=full_name)
+            await TaxiService.update_user_phone(db, telegram_id, phone)
+            driver = await TaxiService.register_driver(db, telegram_id, car_model, car_number)
+            await TaxiService.approve_driver(db, driver.id)
+        saved = True
     except Exception as e:
-        logger.error(f"Driver registration API error: {e}")
+        logger.exception(f"Driver registration DB error: {e}")
+
+    if not saved:
         await state.clear()
         await message.answer(
-            "❌ Ошибка при отправке заявки. Попробуйте позже.",
+            "❌ Ошибка при сохранении заявки. Попробуйте позже или обратитесь в поддержку.",
             reply_markup=await _get_menu_for_user(telegram_id),
         )
         return
