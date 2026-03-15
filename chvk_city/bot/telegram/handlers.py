@@ -358,8 +358,7 @@ async def _save_destination_and_show_options(target_message: Message, state: FSM
     sent = await target_message.answer(
         "📍 Адрес добавлен в маршрут.\n\n"
         "Ваш маршрут:\n"
-        f"🚕 Откуда: {from_address}\n"
-        f"🏁 Куда: {' -> '.join(destination_addresses)}",
+        f"{_format_route_vertical(from_address, destination_addresses)}",
         reply_markup=keyboards.get_destination_flow_keyboard(),
     )
     msg_list.append(sent.message_id)
@@ -390,6 +389,16 @@ def _format_route_vertical(from_address: str, destination_addresses: list[str]) 
         lines.append(f"🛑 Точка {idx}: {address}")
     lines.append(f"🏁 Финиш: {destination_addresses[-1]}")
     return "\n".join(lines)
+
+
+def _split_destination_addresses(to_address: str | None) -> list[str]:
+    if not to_address:
+        return []
+    return [part.strip() for part in to_address.split(" -> ") if part.strip()]
+
+
+def _format_route_from_values(from_address: str | None, to_address: str | None) -> str:
+    return _format_route_vertical(from_address or "—", _split_destination_addresses(to_address))
 
 
 def _estimate_order_price(data: dict) -> float:
@@ -1686,11 +1695,11 @@ async def accept_order_callback(callback: CallbackQuery, state: FSMContext):
 
             # Отправляем карточку заказа в ЛИЧНЫЕ сообщения водителю
             try:
+                route_text = _format_route_from_values(order.get("from_address"), order.get("to_address"))
                 card_text = (
                     f"🚕 **Вы приняли заказ #{order_id}**\n\n"
                     f"👤 Клиент: {order.get('client_phone', 'не указан')}\n"
-                    f"📍 Откуда: {order['from_address']}\n"
-                    f"🏁 Куда: {order['to_address']}"
+                    f"{route_text}"
                     + (f"\n💬 Примечание: {order.get('comment')}" if order.get('comment') else "\n💬 Примечание: Нет")
                 )
                 await callback.bot.send_message(
@@ -1717,12 +1726,13 @@ async def accept_order_callback(callback: CallbackQuery, state: FSMContext):
                         client_chat_id,
                     )
                 else:
+                    route_text = _format_route_from_values(order.get("from_address"), order.get("to_address"))
                     text = (
-                        "🚕 **Водитель найден!**\n\n"
-                f"👤 Имя: {callback.from_user.full_name}\n"
-                f"🚗 Машина: {order['car_model']}\n"
-                f"🔢 Номер: {order['car_number']}\n\n"
-                        "🚕 Водитель скоро прибудет."
+                        "🚕 Водитель принял ваш заказ и выезжает!\n\n"
+                        f"{route_text}\n\n"
+                        f"👤 Имя: {callback.from_user.full_name}\n"
+                        f"🚗 Машина: {order['car_model']}\n"
+                        f"🔢 Номер: {order['car_number']}"
                     )
                     sent_msg = await callback.bot.send_message(
                         client_chat_id,
@@ -1821,11 +1831,10 @@ async def complete_order_callback(callback: CallbackQuery, state: FSMContext):
 
                     # Формируем финальный чек в том же формате, что и сообщение «Водитель найден»
                     receipt_text = (
-                        "✅ Поездка завершена!\n\n"
+                        "🏁 Поездка завершена. Спасибо, что вы с нами!\n\n"
                         f"🚖 Ваш заказ выполнил: {driver_name}\n"
                         f"🚗 Машина: {car_model}\n"
                         f"🔢 Номер: {car_number}\n\n"
-                        "🙏 Спасибо, что воспользовались нашим сервисом!\n"
                         "Пожалуйста, оцените работу водителя:"
                     )
 
@@ -2098,9 +2107,10 @@ async def at_place_callback(callback: CallbackQuery, state: FSMContext):
                     )
                 else:
                     # Сообщение без номера, номер отдаём через отдельную кнопку 'Позвонить'
+                    route_text = _format_route_from_values(order.get("from_address"), order.get("to_address"))
                     text = (
-                        "🚕 **Водитель на месте!**\n\n"
-                        "Выходите, пожалуйста, машина ожидает вас по адресу."
+                        "🚕 Такси подъехало! Выходите к машине.\n\n"
+                        f"{route_text}"
                     )
                     sent = await callback.bot.send_message(
                         client_chat_id,
@@ -2378,7 +2388,7 @@ async def start_trip_callback(callback: CallbackQuery, state: FSMContext):
 
                     sent = await callback.bot.send_message(
                         client_chat_id,
-                        "🚕 Поездка началась! Желаем приятного пути.",
+                        "🚀 Поехали! Приятного пути.",
                     )
                     # Добавить новое сообщение пассажиру в список msg_to_delete
                     to_del = p_data.get("msg_to_delete", [])
