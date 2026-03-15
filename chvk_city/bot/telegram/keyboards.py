@@ -248,6 +248,18 @@ def get_destination_flow_keyboard():
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
+
+def get_order_options_keyboard(has_child_seat: bool = False, has_pet: bool = False):
+    child_text = "✅ 👶 Детское кресло" if has_child_seat else "👶 Детское кресло"
+    pet_text = "✅ 🐾 С питомцем" if has_pet else "🐾 С питомцем"
+    buttons = [
+        [InlineKeyboardButton(text=child_text, callback_data="toggle_child_seat")],
+        [InlineKeyboardButton(text=pet_text, callback_data="toggle_pet")],
+        [InlineKeyboardButton(text="✍️ Добавить комментарий", callback_data="add_order_comment")],
+        [InlineKeyboardButton(text="🚀 Рассчитать стоимость", callback_data="calculate_order_price")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
 def get_order_manage_keyboard(order_id: int):
     buttons = [[InlineKeyboardButton(text="❌ Отменить заказ", callback_data=f"cancel_{order_id}")]]
     return InlineKeyboardMarkup(inline_keyboard=buttons)

@@ -27,6 +27,7 @@ online_drivers: set[int] = set()
 class OrderTaxi(StatesGroup):
     waiting_for_from_address = State()
     waiting_for_to_address = State()
+    waiting_for_options = State()
     waiting_for_comment = State()
 
 class DriverRegistration(StatesGroup):
@@ -109,7 +110,7 @@ async def process_to_address(message: Message, state: FSMContext):
 @router.message(OrderTaxi.waiting_for_comment, F.text)
 async def process_comment(message: Message, state: FSMContext):
     data = await state.get_data()
-    if not data.get("from_address") or not data.get("to_address"):
+    if not data.get("from_address") or not data.get("destination_addresses"):
         await state.clear()
         await message.answer(
             "Сессия сброшена. Нажмите «🚕 Заказать такси» для нового заказа.",
@@ -127,14 +128,16 @@ async def process_comment(message: Message, state: FSMContext):
         "⚙️ Админка",
         "💎 УПРАВЛЕНИЕ",
     }:
-        await message.answer("Сейчас я жду комментарий к заказу или текст, который вы хотите передать водителю.")
+        await message.answer("Сейчас я жду текст комментария к заказу.")
         return
     data = await state.get_data()
     msg_list = data.get("msg_to_delete", [])
     msg_list.append(message.message_id)
-    await state.update_data(msg_to_delete=msg_list)
-
-    await finalize_order(message, state, comment=message.text)
+    await state.update_data(
+        msg_to_delete=msg_list,
+        order_comment=(message.text or "").strip(),
+    )
+    await _show_order_options_screen(message, state)
 
 
 _http_client: httpx.AsyncClient | None = None
@@ -362,6 +365,55 @@ async def _save_destination_and_show_options(target_message: Message, state: FSM
     await state.update_data(msg_to_delete=msg_list)
 
 
+def _build_order_options_text(from_address: str, destination_addresses: list[str], order_comment: str | None = None) -> str:
+    route_display = " -> ".join(destination_addresses) if destination_addresses else "—"
+    text = (
+        "🛠 Опции заказа\n"
+        "Вы можете выбрать дополнительные параметры или добавить комментарий для водителя.\n\n"
+        "Ваш маршрут:\n"
+        f"🚕 Откуда: {from_address}\n"
+        f"🏁 Куда: {route_display}"
+    )
+    if order_comment:
+        text += f"\n\n💬 Комментарий: {order_comment}"
+    return text
+
+
+def _build_order_comment_payload(data: dict, explicit_comment: str | None = None) -> str | None:
+    order_comment = explicit_comment if explicit_comment is not None else data.get("order_comment")
+    parts: list[str] = []
+    if data.get("has_child_seat"):
+        parts.append("👶 Детское кресло")
+    if data.get("has_pet"):
+        parts.append("🐾 С питомцем")
+    if order_comment:
+        parts.append(f"💬 {order_comment}")
+    if not parts:
+        return None
+    return "\n".join(parts)
+
+
+async def _show_order_options_screen(target_message: Message, state: FSMContext):
+    data = await state.get_data()
+    from_address = data.get("from_address") or "—"
+    destination_addresses = data.get("destination_addresses") or []
+    has_child_seat = bool(data.get("has_child_seat"))
+    has_pet = bool(data.get("has_pet"))
+    order_comment = data.get("order_comment")
+
+    sent = await target_message.answer(
+        _build_order_options_text(from_address, destination_addresses, order_comment),
+        reply_markup=keyboards.get_order_options_keyboard(
+            has_child_seat=has_child_seat,
+            has_pet=has_pet,
+        ),
+    )
+    msg_list = data.get("msg_to_delete", [])
+    msg_list.append(sent.message_id)
+    await state.update_data(msg_to_delete=msg_list)
+    await state.set_state(OrderTaxi.waiting_for_options)
+
+
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
     """
@@ -470,6 +522,9 @@ async def taxi_order_start(message: Message, state: FSMContext):
         destination_addresses=[],
         from_address=None,
         to_address=None,
+        has_child_seat=False,
+        has_pet=False,
+        order_comment=None,
         is_processing=False,
     )
     await _prompt_for_from_address(message, state, message.from_user.id)
@@ -1283,16 +1338,6 @@ async def recent_to_callback(callback: CallbackQuery, state: FSMContext):
     await _save_destination_and_show_options(callback.message, state, to_address, callback.from_user.id)
 
 
-@router.callback_query(F.data == "skip_comment", OrderTaxi.waiting_for_comment)
-async def process_skip_comment(callback: CallbackQuery, state: FSMContext):
-    await callback.answer()
-    try:
-        await callback.message.delete()
-    except Exception:
-        pass
-    await finalize_order(callback.message, state, comment=None)
-
-
 @router.callback_query(F.data == "add_more_address", OrderTaxi.waiting_for_to_address)
 async def add_more_address_callback(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
@@ -1322,25 +1367,92 @@ async def finish_route_callback(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_reply_markup(reply_markup=None)
     except Exception:
         pass
-    sent = await callback.message.answer(
-        "Желаете добавить комментарий к заказу? ✍️\n"
-        "(Например: подъезд 2, детское кресло, багаж)\n\n"
-        "Или нажмите кнопку ниже, чтобы пропустить. 👇",
-        reply_markup=keyboards.get_skip_comment_keyboard(),
+    await state.update_data(
+        to_address=" -> ".join(destination_addresses),
+        has_child_seat=bool(data.get("has_child_seat", False)),
+        has_pet=bool(data.get("has_pet", False)),
+        order_comment=data.get("order_comment"),
     )
+    await _show_order_options_screen(callback.message, state)
+
+
+@router.callback_query(F.data == "toggle_child_seat", OrderTaxi.waiting_for_options)
+async def toggle_child_seat_callback(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    await state.update_data(has_child_seat=not bool(data.get("has_child_seat")))
+    await callback.answer("Опция обновлена")
+    try:
+        await callback.message.edit_text(
+            _build_order_options_text(
+                data.get("from_address") or "—",
+                data.get("destination_addresses") or [],
+                data.get("order_comment"),
+            ),
+            reply_markup=keyboards.get_order_options_keyboard(
+                has_child_seat=not bool(data.get("has_child_seat")),
+                has_pet=bool(data.get("has_pet")),
+            ),
+        )
+    except Exception:
+        pass
+
+
+@router.callback_query(F.data == "toggle_pet", OrderTaxi.waiting_for_options)
+async def toggle_pet_callback(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    await state.update_data(has_pet=not bool(data.get("has_pet")))
+    await callback.answer("Опция обновлена")
+    try:
+        await callback.message.edit_text(
+            _build_order_options_text(
+                data.get("from_address") or "—",
+                data.get("destination_addresses") or [],
+                data.get("order_comment"),
+            ),
+            reply_markup=keyboards.get_order_options_keyboard(
+                has_child_seat=bool(data.get("has_child_seat")),
+                has_pet=not bool(data.get("has_pet")),
+            ),
+        )
+    except Exception:
+        pass
+
+
+@router.callback_query(F.data == "add_order_comment", OrderTaxi.waiting_for_options)
+async def add_order_comment_callback(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    sent = await callback.message.answer(
+        "✍️ Напишите комментарий для водителя.\nНапример: Подъезд 2.",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+    data = await state.get_data()
     msg_list = data.get("msg_to_delete", [])
     msg_list.append(sent.message_id)
-    await state.update_data(
-        msg_to_delete=msg_list,
-        to_address=" -> ".join(destination_addresses),
-    )
+    await state.update_data(msg_to_delete=msg_list)
     await state.set_state(OrderTaxi.waiting_for_comment)
 
 
+@router.callback_query(F.data == "calculate_order_price", OrderTaxi.waiting_for_options)
+async def calculate_order_price_callback(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await finalize_order(callback.message, state)
+
+
 async def finalize_order(message: Message, state: FSMContext, comment: str | None = None):
-    # Работаем только в состоянии ожидания комментария (часть процесса ввода адреса/заказа)
+    # Работаем только в состояниях финального этапа оформления заказа
     current_state = await state.get_state() or ""
-    if "waiting_for_comment" not in current_state:
+    if current_state not in {
+        OrderTaxi.waiting_for_options.state,
+        OrderTaxi.waiting_for_comment.state,
+    }:
         return
     data = await state.get_data()
     # Защита от двойного вызова: один клик = один заказ
@@ -1369,6 +1481,7 @@ async def finalize_order(message: Message, state: FSMContext, comment: str | Non
         return
 
     route_display = " -> ".join(destination_addresses)
+    final_comment = _build_order_comment_payload(data, explicit_comment=comment)
 
     await state.update_data(is_processing=True)
 
@@ -1379,7 +1492,7 @@ async def finalize_order(message: Message, state: FSMContext, comment: str | Non
                 "telegram_id": message.from_user.id,
                 "from_address": from_address,
                 "to_address": route_display,
-                "comment": comment
+                "comment": final_comment
             }
         )
             
@@ -1391,8 +1504,8 @@ async def finalize_order(message: Message, state: FSMContext, comment: str | Non
                 f"📍 Откуда: {from_address}\n"
                 f"🏁 Куда: {route_display}"
             )
-            if comment:
-                base_text += f"\n\n💬 Примечание: {comment}"
+            if final_comment:
+                base_text += f"\n\n💬 Примечание: {final_comment}"
 
             sent_msg = await message.answer(
                 base_text,
@@ -1410,8 +1523,8 @@ async def finalize_order(message: Message, state: FSMContext, comment: str | Non
                 f"📍 Откуда: {from_address}\n"
                 f"🏁 Куда: {route_display}"
             )
-            if comment:
-                driver_msg += f"\n\n💬 Комментарий: {comment}"
+            if final_comment:
+                driver_msg += f"\n\n💬 Комментарий: {final_comment}"
             
             try:
                 await message.bot.send_message(
@@ -2204,6 +2317,9 @@ async def start_new_order_callback(callback: CallbackQuery, state: FSMContext):
         destination_addresses=[],
         from_address=None,
         to_address=None,
+        has_child_seat=False,
+        has_pet=False,
+        order_comment=None,
     )
     try:
         await callback.message.answer("Отлично! Начинаем новый заказ. 🚕")
