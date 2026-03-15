@@ -6,7 +6,7 @@ from datetime import datetime
 class Driver(Base):
     __tablename__ = "drivers"
 
-    id: Mapped[int] = mapped_column(primary_key=True)
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), unique=True)
     car_model: Mapped[str] = mapped_column(String(255))
     car_number: Mapped[str] = mapped_column(String(20))

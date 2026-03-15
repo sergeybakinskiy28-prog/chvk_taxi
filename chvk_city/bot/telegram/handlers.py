@@ -564,66 +564,65 @@ async def _finalize_driver_registration(message: Message, state: FSMContext, pho
         car_number = car_info
         car_model = car_info
 
-    # Сохранение: сначала API, при неудаче — прямая запись в БД
+    # Сохранение: сначала API, при неудаче — прямая запись в БД (всё в одном try для перехвата ошибок)
     saved = False
-    driver_id = None
-
-    # Пытаемся через API
     try:
-        await get_http_client().post("/taxi/user/register", json={"telegram_id": telegram_id, "name": full_name})
-        await get_http_client().post("/taxi/user/update_phone", json={"telegram_id": telegram_id, "phone": phone})
-        reg_resp = await get_http_client().post(
-            "/taxi/driver/register",
-            json={"telegram_id": telegram_id, "car_model": car_model, "car_number": car_number},
-        )
-        if reg_resp.status_code != 200:
-            await state.clear()
-            await message.answer(
-                f"❌ Ошибка API: {reg_resp.status_code}",
-                reply_markup=keyboards.get_main_menu(is_driver=False, has_pending_application=False, user_id=telegram_id),
-            )
-            return
-        reg_data = reg_resp.json()
-        driver_id = reg_data.get("driver_id")
-        approve_resp = await get_http_client().post(f"/taxi/driver/{driver_id}/approve")
-        if approve_resp.status_code != 200:
-            await state.clear()
-            await message.answer(
-                f"❌ Ошибка API при одобрении: {approve_resp.status_code}",
-                reply_markup=keyboards.get_main_menu(is_driver=False, has_pending_application=False, user_id=telegram_id),
-            )
-            return
-        saved = True
-        print(f"DEBUG: Driver {telegram_id} saved via API", flush=True)
-    except Exception as api_err:
-        logger.error(f"Driver registration API failed, trying DB: {api_err}")
-        print(f"DEBUG: API failed for {telegram_id}, trying DB fallback", flush=True)
-
-    # Fallback: прямая запись в БД
-    if not saved:
+        # Пытаемся через API
         try:
+            await get_http_client().post("/taxi/user/register", json={"telegram_id": telegram_id, "name": full_name})
+            await get_http_client().post("/taxi/user/update_phone", json={"telegram_id": telegram_id, "phone": phone})
+            reg_resp = await get_http_client().post(
+                "/taxi/driver/register",
+                json={"telegram_id": telegram_id, "car_model": car_model, "car_number": car_number},
+            )
+            if reg_resp.status_code != 200:
+                raise Exception(f"API register вернул {reg_resp.status_code}: {reg_resp.text[:200]}")
+            reg_data = reg_resp.json()
+            driver_id = reg_data.get("driver_id")
+            approve_resp = await get_http_client().post(f"/taxi/driver/{driver_id}/approve")
+            if approve_resp.status_code != 200:
+                raise Exception(f"API approve вернул {approve_resp.status_code}")
+            async with async_session() as db:
+                check_driver = await TaxiService.get_driver(db, telegram_id)
+                if check_driver is None:
+                    raise Exception("API сохранил, но водитель не найден в БД!")
+            saved = True
+            print(f"DEBUG: Driver {telegram_id} saved via API", flush=True)
+        except Exception as api_err:
+            logger.error(f"Driver registration API failed, trying DB: {api_err}")
+
+        # Fallback: прямая запись в БД
+        if not saved:
             logger.info(f"Driver registration: saving via DB tg_id={telegram_id}")
             async with async_session() as db:
                 await TaxiService.get_or_create_user(db, telegram_id, name=full_name)
                 await TaxiService.update_user_phone(db, telegram_id, phone)
                 driver = await TaxiService.register_driver(db, telegram_id, car_model, car_number)
-                driver_id = driver.id
                 await TaxiService.approve_driver(db, driver.id)
+                await db.commit()
+                check_driver = await TaxiService.get_driver(db, telegram_id)
+                if check_driver is None:
+                    raise Exception(
+                        "Запись в БД инициирована, но не найдена!"
+                    )
             saved = True
             print(f"DEBUG: Driver {telegram_id} saved via DB", flush=True)
-        except Exception as e:
-            logger.error(f"Driver registration DB error: {e}", exc_info=True)
-
-    if not saved:
+    except Exception as e:
+        await message.answer(f"КРИТИЧЕСКАЯ ОШИБКА БАЗЫ: {e}")
+        logger.error(f"Driver registration critical error: {e}", exc_info=True)
         await state.clear()
         try:
             menu = await _get_menu_for_user(telegram_id)
-        except Exception as menu_err:
-            logger.error(f"Failed to get menu after registration error: {menu_err}", exc_info=True)
+        except Exception:
             menu = keyboards.get_main_menu(is_driver=False, has_pending_application=False, user_id=telegram_id)
+        await message.answer("Выйдите из анкеты и попробуйте позже.", reply_markup=menu)
+        return
+
+    if not saved:
+        await state.clear()
         await message.answer(
             "❌ Ошибка при сохранении данных. Попробуйте позже.",
-            reply_markup=menu,
+            reply_markup=await _get_menu_for_user(telegram_id),
         )
         return
 
