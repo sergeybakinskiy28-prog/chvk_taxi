@@ -3,7 +3,7 @@ import logging
 import httpx
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, ReplyKeyboardRemove
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.base import StorageKey
@@ -338,6 +338,7 @@ async def support_handler(message: Message):
     )
 
 
+@router.message(Command("driver"))
 @router.message(F.text == "💼 Кабинет водителя")
 async def driver_cabinet_handler(message: Message):
     """
@@ -1743,8 +1744,10 @@ async def rate_trip_callback(callback: CallbackQuery):
 
 # Последний хендлер в файле — блокировщик: если бот в любом состоянии (ждёт адрес и т.д.), не трогаем сообщение
 
-# Кнопки, сообщения с которыми НЕ удаляем (админка/меню)
+# Кнопки и команды, сообщения с которыми НЕ удаляем (админка/меню)
 _ADMIN_SAFE_TEXTS = {
+    "/start",
+    "/driver",
     "🚕 Заказать такси",
     "🗂 Мои заказы",
     "📞 Поддержка",
