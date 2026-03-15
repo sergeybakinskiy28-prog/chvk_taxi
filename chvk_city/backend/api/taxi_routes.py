@@ -16,6 +16,7 @@ class OrderCreate(BaseModel):
     from_address: str
     to_address: str
     comment: str | None = None
+    price: float | None = None
 
 class OrderAccept(BaseModel):
     order_id: int
@@ -468,7 +469,12 @@ async def driver_cancel_order(data: DriverCancelOrder, db: AsyncSession = Depend
 @router.post("/order")
 async def create_order(order_data: OrderCreate, db: AsyncSession = Depends(get_db)):
     order = await TaxiService.create_order(
-        db, order_data.telegram_id, order_data.from_address, order_data.to_address, order_data.comment
+        db,
+        order_data.telegram_id,
+        order_data.from_address,
+        order_data.to_address,
+        order_data.comment,
+        order_data.price,
     )
     # Fetch user to get telegram_id for the response
     user_result = await db.execute(select(User).where(User.id == order.user_id))

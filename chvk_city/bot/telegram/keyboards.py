@@ -260,6 +260,14 @@ def get_order_options_keyboard(has_child_seat: bool = False, has_pet: bool = Fal
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
+
+def get_order_confirmation_keyboard():
+    buttons = [
+        [InlineKeyboardButton(text="🚖 Подтвердить заказ", callback_data="confirm_order_creation")],
+        [InlineKeyboardButton(text="❌ Отменить", callback_data="cancel_order_creation")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
 def get_order_manage_keyboard(order_id: int):
     buttons = [[InlineKeyboardButton(text="❌ Отменить заказ", callback_data=f"cancel_{order_id}")]]
     return InlineKeyboardMarkup(inline_keyboard=buttons)

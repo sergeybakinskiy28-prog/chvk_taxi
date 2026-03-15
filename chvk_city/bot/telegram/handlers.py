@@ -29,6 +29,7 @@ class OrderTaxi(StatesGroup):
     waiting_for_to_address = State()
     waiting_for_options = State()
     waiting_for_comment = State()
+    waiting_for_confirmation = State()
 
 class DriverRegistration(StatesGroup):
     """Пошаговый опрос для регистрации водителя."""
@@ -366,17 +367,62 @@ async def _save_destination_and_show_options(target_message: Message, state: FSM
 
 
 def _build_order_options_text(from_address: str, destination_addresses: list[str], order_comment: str | None = None) -> str:
-    route_display = " -> ".join(destination_addresses) if destination_addresses else "—"
     text = (
         "🛠 Опции заказа\n"
         "Вы можете выбрать дополнительные параметры или добавить комментарий для водителя.\n\n"
-        "Ваш маршрут:\n"
-        f"🚕 Откуда: {from_address}\n"
-        f"🏁 Куда: {route_display}"
+        + _format_route_vertical(from_address, destination_addresses)
     )
     if order_comment:
         text += f"\n\n💬 Комментарий: {order_comment}"
     return text
+
+
+def _format_route_vertical(from_address: str, destination_addresses: list[str]) -> str:
+    lines = [f"📍 Откуда: {from_address}"]
+    if not destination_addresses:
+        return "\n".join(lines)
+
+    if len(destination_addresses) == 1:
+        lines.append(f"🏁 Финиш: {destination_addresses[0]}")
+        return "\n".join(lines)
+
+    for idx, address in enumerate(destination_addresses[:-1], start=1):
+        lines.append(f"🛑 Точка {idx}: {address}")
+    lines.append(f"🏁 Финиш: {destination_addresses[-1]}")
+    return "\n".join(lines)
+
+
+def _estimate_order_price(data: dict) -> float:
+    destination_addresses = data.get("destination_addresses") or []
+    base_price = 120.0
+    destination_price = 60.0 * len(destination_addresses)
+    extra_stop_price = 40.0 * max(0, len(destination_addresses) - 1)
+    child_seat_price = 50.0 if data.get("has_child_seat") else 0.0
+    pet_price = 30.0 if data.get("has_pet") else 0.0
+    return base_price + destination_price + extra_stop_price + child_seat_price + pet_price
+
+
+def _build_final_summary_text(data: dict) -> str:
+    from_address = data.get("from_address") or "—"
+    destination_addresses = data.get("destination_addresses") or []
+    order_comment = data.get("order_comment")
+    price = data.get("calculated_price")
+    options: list[str] = []
+    if data.get("has_child_seat"):
+        options.append("👶 Детское кресло")
+    if data.get("has_pet"):
+        options.append("🐾 С питомцем")
+    if order_comment:
+        options.append(f"💬 {order_comment}")
+    options_text = "\n".join(options) if options else "—"
+    price_text = f"{price:.0f} руб." if isinstance(price, (int, float)) else "—"
+
+    return (
+        "✅ Итог заказа\n\n"
+        f"{_format_route_vertical(from_address, destination_addresses)}\n\n"
+        f"🛠 Опции:\n{options_text}\n\n"
+        f"💰 Стоимость: {price_text}"
+    )
 
 
 def _build_order_comment_payload(data: dict, explicit_comment: str | None = None) -> str | None:
@@ -525,6 +571,7 @@ async def taxi_order_start(message: Message, state: FSMContext):
         has_child_seat=False,
         has_pet=False,
         order_comment=None,
+        calculated_price=None,
         is_processing=False,
     )
     await _prompt_for_from_address(message, state, message.from_user.id)
@@ -1438,6 +1485,29 @@ async def add_order_comment_callback(callback: CallbackQuery, state: FSMContext)
 
 @router.callback_query(F.data == "calculate_order_price", OrderTaxi.waiting_for_options)
 async def calculate_order_price_callback(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    destination_addresses = data.get("destination_addresses") or []
+    if not destination_addresses:
+        await callback.answer("Сначала добавьте хотя бы один адрес назначения.", show_alert=True)
+        return
+    calculated_price = _estimate_order_price(data)
+    await state.update_data(calculated_price=calculated_price)
+    await callback.answer()
+    try:
+        await callback.message.edit_text(
+            _build_final_summary_text({**data, "calculated_price": calculated_price}),
+            reply_markup=keyboards.get_order_confirmation_keyboard(),
+        )
+    except Exception:
+        await callback.message.answer(
+            _build_final_summary_text({**data, "calculated_price": calculated_price}),
+            reply_markup=keyboards.get_order_confirmation_keyboard(),
+        )
+    await state.set_state(OrderTaxi.waiting_for_confirmation)
+
+
+@router.callback_query(F.data == "confirm_order_creation", OrderTaxi.waiting_for_confirmation)
+async def confirm_order_creation_callback(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     try:
         await callback.message.edit_reply_markup(reply_markup=None)
@@ -1446,13 +1516,24 @@ async def calculate_order_price_callback(callback: CallbackQuery, state: FSMCont
     await finalize_order(callback.message, state)
 
 
+@router.callback_query(F.data == "cancel_order_creation", OrderTaxi.waiting_for_confirmation)
+async def cancel_order_creation_callback(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await state.clear()
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await callback.message.answer(
+        "❌ Заказ отменен",
+        reply_markup=await _get_menu_for_user(callback.from_user.id),
+    )
+
+
 async def finalize_order(message: Message, state: FSMContext, comment: str | None = None):
-    # Работаем только в состояниях финального этапа оформления заказа
+    # Работаем только после явного подтверждения заказа
     current_state = await state.get_state() or ""
-    if current_state not in {
-        OrderTaxi.waiting_for_options.state,
-        OrderTaxi.waiting_for_comment.state,
-    }:
+    if current_state != OrderTaxi.waiting_for_confirmation.state:
         return
     data = await state.get_data()
     # Защита от двойного вызова: один клик = один заказ
@@ -1482,6 +1563,8 @@ async def finalize_order(message: Message, state: FSMContext, comment: str | Non
 
     route_display = " -> ".join(destination_addresses)
     final_comment = _build_order_comment_payload(data, explicit_comment=comment)
+    calculated_price = data.get("calculated_price")
+    route_vertical = _format_route_vertical(from_address, destination_addresses)
 
     await state.update_data(is_processing=True)
 
@@ -1492,7 +1575,8 @@ async def finalize_order(message: Message, state: FSMContext, comment: str | Non
                 "telegram_id": message.from_user.id,
                 "from_address": from_address,
                 "to_address": route_display,
-                "comment": final_comment
+                "comment": final_comment,
+                "price": calculated_price,
             }
         )
             
@@ -1501,9 +1585,10 @@ async def finalize_order(message: Message, state: FSMContext, comment: str | Non
             order_id = order['id']
             base_text = (
                 "✅ Заказ создан! Ищем водителя...\n\n"
-                f"📍 Откуда: {from_address}\n"
-                f"🏁 Куда: {route_display}"
+                f"{route_vertical}"
             )
+            if isinstance(calculated_price, (int, float)):
+                base_text += f"\n\n💰 Стоимость: {calculated_price:.0f} руб."
             if final_comment:
                 base_text += f"\n\n💬 Примечание: {final_comment}"
 
@@ -1520,9 +1605,10 @@ async def finalize_order(message: Message, state: FSMContext, comment: str | Non
             # Отправка в чат водителей
             driver_msg = (
                 f"🚕 **Новый заказ #{order_id}**\n\n"
-                f"📍 Откуда: {from_address}\n"
-                f"🏁 Куда: {route_display}"
+                f"{route_vertical}"
             )
+            if isinstance(calculated_price, (int, float)):
+                driver_msg += f"\n\n💰 Стоимость: {calculated_price:.0f} руб."
             if final_comment:
                 driver_msg += f"\n\n💬 Комментарий: {final_comment}"
             
@@ -1817,9 +1903,23 @@ async def cancel_delete_driver_callback(callback: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("cancel_"))
-async def cancel_order_callback(callback: CallbackQuery):
+async def cancel_order_callback(callback: CallbackQuery, state: FSMContext):
     # callback.data имеет вид "cancel_{order_id}" (не cancel_delete)
-    order_id = int(callback.data.split("_")[-1])
+    raw_order_id = callback.data.split("_")[-1]
+    if not raw_order_id.isdigit():
+        await callback.answer()
+        await state.clear()
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        await callback.message.answer(
+            "❌ Заказ отменен",
+            reply_markup=await _get_menu_for_user(callback.from_user.id),
+        )
+        return
+
+    order_id = int(raw_order_id)
     
     try:
         response = await get_http_client().post(
@@ -1836,6 +1936,19 @@ async def cancel_order_callback(callback: CallbackQuery):
             except Exception:
                 pass
         else:
+            state_now = await state.get_state()
+            if state_now and state_now.startswith("OrderTaxi"):
+                await state.clear()
+                try:
+                    await callback.message.edit_reply_markup(reply_markup=None)
+                except Exception:
+                    pass
+                await callback.message.answer(
+                    "❌ Заказ отменен",
+                    reply_markup=await _get_menu_for_user(callback.from_user.id),
+                )
+                await callback.answer()
+                return
             await callback.answer("Ошибка при отмене: заказ уже принят или не найден", show_alert=True)
     except Exception as e:
         logger.exception(f"Error in cancel_order_callback: {e}")
@@ -2320,6 +2433,7 @@ async def start_new_order_callback(callback: CallbackQuery, state: FSMContext):
         has_child_seat=False,
         has_pet=False,
         order_comment=None,
+        calculated_price=None,
     )
     try:
         await callback.message.answer("Отлично! Начинаем новый заказ. 🚕")

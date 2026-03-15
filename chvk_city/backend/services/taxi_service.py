@@ -36,7 +36,14 @@ class TaxiService:
         return user
 
     @staticmethod
-    async def create_order(db: AsyncSession, telegram_id: int, from_address: str, to_address: str, comment: str | None = None) -> Order:
+    async def create_order(
+        db: AsyncSession,
+        telegram_id: int,
+        from_address: str,
+        to_address: str,
+        comment: str | None = None,
+        price: float | None = None,
+    ) -> Order:
         # Get user by telegram_id
         user = await TaxiService.get_or_create_user(db, telegram_id)
         
@@ -45,7 +52,8 @@ class TaxiService:
             from_address=from_address,
             to_address=to_address,
             comment=comment,
-            status="new"
+            status="new",
+            price=price,
         )
         db.add(new_order)
         try:
