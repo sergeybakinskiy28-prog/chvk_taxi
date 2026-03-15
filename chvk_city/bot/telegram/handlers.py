@@ -1057,7 +1057,7 @@ async def back_to_menu_callback(callback: CallbackQuery, state: FSMContext):
 async def process_skip_comment(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     try:
-    await callback.message.delete()
+        await callback.message.delete()
     except Exception:
         pass
     await finalize_order(callback.message, state, comment=None)
@@ -1201,7 +1201,7 @@ async def accept_order_callback(callback: CallbackQuery, state: FSMContext):
             # Краткое подтверждение в чате, где нажата кнопка (группа водителей)
             await callback.answer("Вы приняли заказ! ✅")
             try:
-            await callback.message.edit_text(
+                await callback.message.edit_text(
                     f"🚕 Заказ #{order_id} принят водителем {callback.from_user.full_name}.",
                     reply_markup=None,
                 )
@@ -1212,12 +1212,12 @@ async def accept_order_callback(callback: CallbackQuery, state: FSMContext):
             try:
                 card_text = (
                     f"🚕 **Вы приняли заказ #{order_id}**\n\n"
-                f"👤 Клиент: {order.get('client_phone', 'не указан')}\n"
-                f"📍 Откуда: {order['from_address']}\n"
+                    f"👤 Клиент: {order.get('client_phone', 'не указан')}\n"
+                    f"📍 Откуда: {order['from_address']}\n"
                     f"🏁 Куда: {order['to_address']}"
                     + (f"\n💬 Примечание: {order.get('comment')}" if order.get('comment') else "\n💬 Примечание: Нет")
-            )
-            await callback.bot.send_message(
+                )
+                await callback.bot.send_message(
                     chat_id=driver_telegram_id,
                     text=card_text,
                     reply_markup=keyboards.get_driver_accept_keyboard(
@@ -1440,9 +1440,9 @@ async def cancel_order_callback(callback: CallbackQuery):
         if response.status_code == 200:
             await callback.answer("Заказ отменен ❌")
             try:
-            await callback.message.edit_text(
-                f"❌ Заказ #{order_id} был отменен вами."
-            )
+                await callback.message.edit_text(
+                    f"❌ Заказ #{order_id} был отменен вами."
+                )
             except Exception:
                 pass
         else:
@@ -1465,7 +1465,7 @@ async def approve_driver_callback(callback: CallbackQuery):
                 "✅ Ваша заявка одобрена! Теперь вы можете принимать заказы."
             )
             try:
-            await callback.message.edit_text(callback.message.text + "\n\n✅ Одобрен")
+                await callback.message.edit_text(callback.message.text + "\n\n✅ Одобрен")
             except Exception:
                 pass
         else:
@@ -1489,7 +1489,7 @@ async def reject_driver_callback(callback: CallbackQuery):
                 "❌ Ваша заявка на регистрацию водителем отклонена."
             )
             try:
-            await callback.message.edit_text(callback.message.text + "\n\n❌ Отклонен")
+                await callback.message.edit_text(callback.message.text + "\n\n❌ Отклонен")
             except Exception:
                 pass
         else:
@@ -1568,7 +1568,7 @@ async def fire_driver_callback(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("ignore_"))
 async def ignore_order_callback(callback: CallbackQuery):
     try:
-    await callback.message.delete()
+        await callback.message.delete()
     except Exception:
         pass
     await callback.answer("Заказ скрыт")
