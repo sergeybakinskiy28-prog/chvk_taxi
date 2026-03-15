@@ -222,7 +222,7 @@ def get_driver_accept_keyboard(order_id: int, from_address: str) -> InlineKeyboa
 
 def get_admin_approval_keyboard(driver_id: int):
     buttons = [
-        [InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"approve_{driver_id}")],
+        [InlineKeyboardButton(text="✅ Одобрить", callback_data=f"approve_{driver_id}")],
         [InlineKeyboardButton(text="❌ Отклонить", callback_data=f"reject_{driver_id}")]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)

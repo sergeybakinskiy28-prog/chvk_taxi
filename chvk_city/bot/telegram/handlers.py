@@ -592,6 +592,7 @@ async def _finalize_driver_registration(message: Message, state: FSMContext, pho
             await TaxiService.get_or_create_user(db, telegram_id, name=full_name)
             await TaxiService.update_user_phone(db, telegram_id, phone)
             await TaxiService.register_driver(db, telegram_id, car_model, car_number)
+            driver = await TaxiService.get_driver(db, telegram_id)
     except Exception as e:
         await message.answer(f"Ошибка сохранения: {e}")
         logger.error(f"Driver registration save error: {e}", exc_info=True)
@@ -609,9 +610,11 @@ async def _finalize_driver_registration(message: Message, state: FSMContext, pho
         f"🆔 Telegram ID: {telegram_id}"
     )
     try:
+        reply_markup = keyboards.get_admin_approval_keyboard(driver.id) if driver else None
         await message.bot.send_message(
             chat_id=settings.ADMIN_CHAT_ID,
             text=admin_text,
+            reply_markup=reply_markup,
         )
     except Exception as e:
         logger.error(f"Failed to send driver notification to admin: {e}")
@@ -1493,12 +1496,14 @@ async def approve_driver_callback(callback: CallbackQuery):
             data = response.json()
             await callback.bot.send_message(
                 data['telegram_id'],
-                "✅ Ваша заявка одобрена! Теперь вы можете принимать заказы."
+                "Поздравляем! Ваша заявка одобрена. Теперь вам доступен Кабинет водителя.",
+                reply_markup=await _get_menu_for_user(data['telegram_id']),
             )
             try:
                 await callback.message.edit_text(callback.message.text + "\n\n✅ Одобрен")
             except Exception:
                 pass
+            await callback.answer("Заявка одобрена", show_alert=False)
         else:
             await callback.answer("Ошибка при одобрении", show_alert=True)
     except Exception as e:
