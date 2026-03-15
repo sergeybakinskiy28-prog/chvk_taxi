@@ -7,7 +7,11 @@ from typing import List
 
 class TaxiService:
     @staticmethod
-    async def get_or_create_user(db: AsyncSession, telegram_id: int, name: str | None = None) -> User:
+    async def get_or_create_user(
+        db: AsyncSession,
+        telegram_id: int,
+        name: str | None = None,
+    ) -> User:
         result = await db.execute(select(User).where(User.telegram_id == telegram_id))
         user = result.scalar_one_or_none()
         
@@ -20,6 +24,15 @@ class TaxiService:
             except Exception:
                 await db.rollback()
                 raise
+        else:
+            if name is not None:
+                user.name = name
+                try:
+                    await db.commit()
+                    await db.refresh(user)
+                except Exception:
+                    await db.rollback()
+                    raise
         return user
 
     @staticmethod

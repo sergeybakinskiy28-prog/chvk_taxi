@@ -1,35 +1,26 @@
+import asyncio
 import logging
 import httpx
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery
-from aiogram.filters import CommandStart, Command
+from aiogram.types import Message, CallbackQuery, ReplyKeyboardRemove
+from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.fsm.storage.base import StorageKey  # 1) Импортируем StorageKey
+from aiogram.fsm.storage.base import StorageKey
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from chvk_city.backend.config import settings
 from chvk_city.bot.telegram import keyboards
+from chvk_city.bot.telegram.constants import OWNER_ID
 
 logger = logging.getLogger(__name__)
+
+
+def _is_owner(user_id: int) -> bool:
+    """Проверка доступа владельца (OWNER_ID)."""
+    return user_id == OWNER_ID
 router = Router()
 
-# Ленивое создание httpx-клиента, чтобы избежать утечек ресурсов
-_http_client: httpx.AsyncClient | None = None
-
-
-def get_http_client() -> httpx.AsyncClient:
-    """
-    Возвращает общий AsyncClient для всех хендлеров.
-    Создаётся при первом обращении.
-    """
-    global _http_client
-    if _http_client is None:
-        _http_client = httpx.AsyncClient(
-            base_url=settings.API_BASE_URL,
-            trust_env=False,
-            timeout=10.0,
-        )
-    return _http_client
+online_drivers: set[int] = set()
 
 class OrderTaxi(StatesGroup):
     waiting_for_from_address = State()
@@ -40,7 +31,134 @@ class RegisterDriver(StatesGroup):
     waiting_for_car_model = State()
     waiting_for_car_number = State()
 
-# 2) Функция для получения состояния FSM пассажира по user_id и боту
+
+class DriverShift(StatesGroup):
+    waiting_for_district = State()
+
+
+class OwnerDeleteDriver(StatesGroup):
+    waiting_for_driver_id = State()
+
+@router.message(OrderTaxi.waiting_for_from_address, F.text)
+async def process_from_address(message: Message, state: FSMContext):
+    # Игнорируем нажатия кнопок меню — ждём текстовый адрес
+    if message.text in {
+        "🚕 Заказать такси",
+        "🗂 Мои заказы",
+        "📞 Поддержка",
+        "💼 Кабинет водителя",
+        "⚙️ Админка",
+        "💎 УПРАВЛЕНИЕ",
+    }:
+        await message.answer("Сейчас я жду адрес, пожалуйста, напишите его текстом.")
+        return
+    data = await state.get_data()
+    msg_list = data.get("msg_to_delete", [])
+    msg_list.append(message.message_id)
+    await state.update_data(msg_to_delete=msg_list)
+
+    await state.update_data(from_address=message.text)
+    # На шаге ввода адресов не показываем главное меню — только поле ввода
+    sent = await message.answer(
+        "Напишите адрес улицы и номер дома (куда едем):",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+    data = await state.get_data()
+    msg_list = data.get("msg_to_delete", [])
+    msg_list.append(sent.message_id)
+    await state.update_data(msg_to_delete=msg_list)
+
+    await state.set_state(OrderTaxi.waiting_for_to_address)
+
+
+@router.message(OrderTaxi.waiting_for_to_address, F.text)
+async def process_to_address(message: Message, state: FSMContext):
+    data = await state.get_data()
+    if not data.get("from_address"):
+        await state.clear()
+        await message.answer(
+            "Сессия сброшена. Нажмите «🚕 Заказать такси» для нового заказа.",
+            reply_markup=keyboards.get_main_menu(message.from_user.id),
+        )
+        return
+
+    # Игнорируем нажатия кнопок меню — ждём текстовый адрес
+    if message.text in {
+        "🚕 Заказать такси",
+        "🗂 Мои заказы",
+        "📞 Поддержка",
+        "💼 Кабинет водителя",
+        "⚙️ Админка",
+        "💎 УПРАВЛЕНИЕ",
+    }:
+        await message.answer("Сейчас я жду второй адрес, пожалуйста, напишите его текстом.")
+        return
+    data = await state.get_data()
+    msg_list = data.get("msg_to_delete", [])
+    msg_list.append(message.message_id)
+    await state.update_data(msg_to_delete=msg_list)
+
+    await state.update_data(to_address=message.text)
+    sent = await message.answer(
+        "Желаете добавить комментарий к заказу? ✍️\n(Например: подъезд 2, детское кресло, багаж)\n\nИли нажмите кнопку ниже, чтобы пропустить. 👇",
+        reply_markup=keyboards.get_skip_comment_keyboard()
+    )
+    data = await state.get_data()
+    msg_list = data.get("msg_to_delete", [])
+    msg_list.append(sent.message_id)
+    await state.update_data(msg_to_delete=msg_list)
+
+    await state.set_state(OrderTaxi.waiting_for_comment)
+
+
+@router.message(OrderTaxi.waiting_for_comment, F.text)
+async def process_comment(message: Message, state: FSMContext):
+    data = await state.get_data()
+    if not data.get("from_address") or not data.get("to_address"):
+        await state.clear()
+        await message.answer(
+            "Сессия сброшена. Нажмите «🚕 Заказать такси» для нового заказа.",
+            reply_markup=keyboards.get_main_menu(message.from_user.id),
+        )
+        return
+
+    # Игнорируем нажатия кнопок меню — ждём комментарий или текст
+    if message.text in {
+        "🚕 Заказать такси",
+        "🗂 Мои заказы",
+        "📞 Поддержка",
+        "💼 Кабинет водителя",
+        "⚙️ Админка",
+        "💎 УПРАВЛЕНИЕ",
+    }:
+        await message.answer("Сейчас я жду комментарий к заказу или текст, который вы хотите передать водителю.")
+        return
+    data = await state.get_data()
+    msg_list = data.get("msg_to_delete", [])
+    msg_list.append(message.message_id)
+    await state.update_data(msg_to_delete=msg_list)
+
+    await finalize_order(message, state, comment=message.text)
+
+
+_http_client: httpx.AsyncClient | None = None
+
+def init_http_client() -> None:
+    """Создать единую сессию httpx при старте бота (избегаем задержек на каждый запрос)."""
+    global _http_client
+    if _http_client is None:
+        _http_client = httpx.AsyncClient(
+            base_url=settings.API_BASE_URL,
+            trust_env=False,
+            timeout=httpx.Timeout(30.0),
+            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+        )
+
+def get_http_client() -> httpx.AsyncClient:
+    if _http_client is None:
+        init_http_client()
+    return _http_client
+
 def _get_passenger_state(bot, storage, user_id):
     key = StorageKey(
         bot_id=bot.id,
@@ -49,33 +167,35 @@ def _get_passenger_state(bot, storage, user_id):
     )
     return FSMContext(storage=storage, key=key)
 
-# Регистрация водителей через бота отключена: водители добавляются вручную через БД или админку.
-# Команда /driver и опрос (марка авто, госномер) удалены из общего доступа.
 
 @router.message(CommandStart())
-async def cmd_start(message: Message):
+async def cmd_start(message: Message, state: FSMContext):
     """
     Стартовая команда:
     - если пользователь уже есть в БД и у него есть телефон — сразу показываем главное меню;
     - иначе регистрируем (при необходимости) и просим отправить контакт.
     """
+    await state.clear()
+
     user_id = message.from_user.id
 
-    # Пытаемся получить пользователя из БД
     try:
         resp = await get_http_client().get(f"/taxi/user/{user_id}")
         if resp.status_code == 200:
             user_data = resp.json()
             if user_data.get("phone"):
-                # Телефон уже есть — сразу показываем главное меню
+                # Телефон уже есть — приветствие и главное меню (без перехода в состояние адреса)
                 await message.answer(
-                    "Рады видеть вас здесь! Куда отправимся? 🚕",
-                    reply_markup=keyboards.get_main_menu()
+                    "Здравствуйте! Рады видеть вас в сервисе CHVK City 🚕\n\n"
+                    "Здесь вы можете быстро заказать такси, посмотреть историю своих поездок или связаться с поддержкой.\n\n"
+                    "Для заказа нажмите кнопку ниже 👇",
+        reply_markup=keyboards.get_main_menu(message.from_user.id),
                 )
                 return
         # Если 404 или нет телефона — продолжаем обычный флоу
     except Exception as e:
         logger.error(f"Failed to fetch user {user_id}: {e}")
+        print(f"[API] get user {user_id}: {e}", flush=True)
 
     # Регистрируем пользователя (если его ещё нет)
     try:
@@ -83,16 +203,17 @@ async def cmd_start(message: Message):
             "/taxi/user/register",
             json={
                 "telegram_id": user_id,
-                "name": message.from_user.full_name
+                "name": message.from_user.full_name or None,
             }
         )
     except Exception as e:
         logger.error(f"Failed to register user {user_id}: {e}")
+        print(f"[API] register user: {e}", flush=True)
     
     await message.answer(
-        "Рады видеть вас здесь! Куда отправимся? 🚕\n\n"
-        "Для безопасности сервиса и возможности связи водителя с вами, пожалуйста, подтвердите ваш номер телефона, нажав кнопку ниже. 👇",
-        reply_markup=keyboards.get_phone_keyboard()
+        "Здравствуйте! Рады видеть вас в сервисе CHVK City 🚕\n\n"
+        "Для безопасности и связи водителя с вами подтвердите, пожалуйста, номер телефона, нажав кнопку ниже. 👇",
+        reply_markup=keyboards.get_phone_keyboard(),
     )
 
 @router.message(F.contact)
@@ -111,33 +232,34 @@ async def process_contact(message: Message):
     
     await message.answer(
         f"✅ Номер {phone} подтвержден! Теперь вы можете заказать такси.",
-        reply_markup=keyboards.get_main_menu()
+        reply_markup=keyboards.get_main_menu(message.from_user.id)
     )
 
 @router.message(F.text == "🚕 Заказать такси")
 async def taxi_order_start(message: Message, state: FSMContext):
-    # Перед началом нового заказа пытаемся удалить прошлое меню "Вы можете заказать такси снова:"
+    # Перед началом нового заказа сбрасываем старое состояние и пытаемся удалить прошлое меню
     data = await state.get_data()
     last_menu_id = data.get("last_menu_msg_id")
+    await state.clear()
     if isinstance(last_menu_id, int):
         try:
             await message.bot.delete_message(chat_id=message.chat.id, message_id=last_menu_id)
-            print(f"DEBUG: Удалено предыдущее меню last_menu_msg_id={last_menu_id}")
-        except Exception as e:
-            print(f"DEBUG: Не удалось удалить предыдущее меню {last_menu_id}: {e}")
+        except Exception:
+            pass
 
     # Начинаем новый список сообщений для удаления
     msg_list: list[int] = []
     # Сохраняем само нажатие "🚕 Заказать такси" (сообщение пользователя)
     msg_list.append(message.message_id)
 
-    sent = await message.answer("Откуда вас забрать? 📍")
+    sent = await message.answer(
+        "Напишите адрес улицы и номер дома (откуда забрать):",
+        reply_markup=ReplyKeyboardRemove(),
+    )
 
-    # Сохраняем первое сообщение бота ("Откуда вас забрать?") в msg_to_delete в состоянии пассажира
+    # Сохраняем первое сообщение бота и флаг: заказ запущен только с кнопки (защита от дублей)
     msg_list.append(sent.message_id)
-    print(f"DEBUG: Записываю ID {message.message_id} и {sent.message_id} в список на удаление (start_order), текущее: {msg_list}")
-    await state.update_data(msg_to_delete=msg_list)
-
+    await state.update_data(msg_to_delete=msg_list, order_started_by_button=True)
     await state.set_state(OrderTaxi.waiting_for_from_address)
 
 
@@ -150,7 +272,7 @@ async def my_orders_handler(message: Message):
         if user_resp.status_code != 200:
             await message.answer(
                 "Вы еще не совершали поездок. Самое время заказать такси! 🚕",
-                reply_markup=keyboards.get_main_menu(),
+                reply_markup=keyboards.get_main_menu(message.from_user.id),
             )
             return
         user_data = user_resp.json()
@@ -158,7 +280,7 @@ async def my_orders_handler(message: Message):
         if not user_id:
             await message.answer(
                 "Вы еще не совершали поездок. Самое время заказать такси! 🚕",
-                reply_markup=keyboards.get_main_menu(),
+                reply_markup=keyboards.get_main_menu(message.from_user.id),
             )
             return
 
@@ -166,7 +288,7 @@ async def my_orders_handler(message: Message):
         if history_resp.status_code != 200:
             await message.answer(
                 "Не удалось загрузить историю заказов. Попробуйте позже.",
-                reply_markup=keyboards.get_main_menu(),
+                reply_markup=keyboards.get_main_menu(message.from_user.id),
             )
             return
 
@@ -174,7 +296,7 @@ async def my_orders_handler(message: Message):
         if not orders:
             await message.answer(
                 "Вы еще не совершали поездок. Самое время заказать такси! 🚕",
-                reply_markup=keyboards.get_main_menu(),
+                reply_markup=keyboards.get_main_menu(message.from_user.id),
             )
             return
 
@@ -203,94 +325,510 @@ async def my_orders_handler(message: Message):
         logger.exception(f"Error loading order history for {telegram_id}: {e}")
         await message.answer(
             "Не удалось загрузить историю заказов. Попробуйте позже.",
-            reply_markup=keyboards.get_main_menu(),
+            reply_markup=keyboards.get_main_menu(message.from_user.id),
         )
 
 
+@router.message(F.text == "📞 Поддержка")
+async def support_handler(message: Message):
+    """Кнопка «Поддержка» — краткая информация и меню."""
+    await message.answer(
+        "📞 Поддержка CHVK City\n\nПо вопросам заказа и работы сервиса обращайтесь к администратору.",
+        reply_markup=keyboards.get_main_menu(message.from_user.id),
+    )
+
+
+@router.message(F.text == "💼 Кабинет водителя")
+async def driver_cabinet_handler(message: Message):
+    """
+    Личный кабинет водителя.
+    Если водитель не зарегистрирован — предлагаем заполнить анкету.
+    Если зарегистрирован и одобрен — показываем меню водителя.
+    """
+    telegram_id = message.from_user.id
+    try:
+        resp = await get_http_client().get(f"/taxi/driver/by_telegram/{telegram_id}")
+    except Exception as e:
+        logger.error(f"Failed to fetch driver by telegram_id={telegram_id}: {e}")
+        await message.answer(
+            "❌ Временно недоступно. Попробуйте позже или свяжитесь с администратором.",
+            reply_markup=keyboards.get_main_menu(message.from_user.id),
+        )
+        return
+
+    if resp.status_code == 404:
+        await message.answer(
+            "🚗 Вы ещё не зарегистрированы как водитель.\n\n"
+            "Если хотите работать в CHVK City, отправьте администратору данные:\n"
+            "— Имя\n— Марка и модель авто\n— Госномер\n— Телефон для связи",
+            reply_markup=keyboards.get_main_menu(message.from_user.id),
+        )
+        return
+
+    if resp.status_code != 200:
+        await message.answer(
+            "❌ Не удалось получить данные водителя. Попробуйте позже.",
+            reply_markup=keyboards.get_main_menu(message.from_user.id),
+        )
+        return
+
+    data = resp.json()
+    if not data.get("is_approved"):
+        await message.answer(
+            "🕓 Ваша анкета водителя отправлена администратору.\n"
+            "Пожалуйста, дождитесь одобрения. После этого здесь откроется меню смены.",
+            reply_markup=keyboards.get_main_menu(message.from_user.id),
+        )
+        return
+
+    await message.answer(
+        "💼 Кабинет водителя\n\n"
+        "Здесь вы можете выйти на смену или приостановить приём заказов.",
+        reply_markup=keyboards.get_driver_menu(),
+    )
+
+
+@router.message(F.text == "⚙️ Админка")
+async def admin_panel_handler(message: Message):
+    """
+    Вход в админ-панель. Доступен только для владельца (OWNER_ID).
+    """
+    if not _is_owner(message.from_user.id):
+        # Молча игнорируем или можно вернуть основное меню
+        await message.answer(
+            "⚠️ У вас нет доступа к админ-панели.",
+            reply_markup=keyboards.get_main_menu(message.from_user.id),
+        )
+        return
+
+    await message.answer(
+        "⚙️ Админ-панель. Выберите действие:",
+        reply_markup=keyboards.get_admin_menu(),
+    )
+
+
+@router.message(F.text == "💎 УПРАВЛЕНИЕ")
+async def owner_panel_handler(message: Message):
+    """
+    Панель владельца (OWNER_ID): отдельное меню управления.
+    """
+    if not _is_owner(message.from_user.id):
+        await message.answer(
+            "⚠️ У вас нет доступа к панели владельца.",
+            reply_markup=keyboards.get_main_menu(message.from_user.id),
+        )
+        return
+
+    await message.answer(
+        "💎 Панель владельца. Выберите действие:",
+        reply_markup=keyboards.get_admin_keyboard(),
+    )
+
+
+@router.message(F.text == "👥 Водители в штате")
+async def owner_list_drivers(message: Message):
+    """
+    Список одобренных водителей для владельца: ID | Имя | Авто | Район.
+    """
+    if not _is_owner(message.from_user.id):
+        return
+
+    try:
+        resp = await get_http_client().get("/taxi/drivers/all")
+    except Exception as e:
+        logger.error(f"Failed to load drivers list (owner): {e}")
+        await message.answer(
+            "❌ Не удалось загрузить список водителей.",
+            reply_markup=keyboards.get_admin_keyboard(),
+        )
+        return
+
+    if resp.status_code != 200:
+        await message.answer(
+            "❌ Не удалось загрузить список водителей.",
+            reply_markup=keyboards.get_admin_keyboard(),
+        )
+        return
+
+    drivers = resp.json() or []
+    if not drivers:
+        await message.answer(
+            "Список одобренных водителей пуст.",
+            reply_markup=keyboards.get_admin_keyboard(),
+        )
+        return
+
+    lines = ["👥 Водители в штате:\n"]
+    for d in drivers:
+        did = d.get("id")
+        name = d.get("name") or "—"
+        car_model = d.get("car_model") or "—"
+        car_number = d.get("car_number") or "—"
+        district = d.get("current_district") or "—"
+        lines.append(f"ID {did} | {name} | {car_model} ({car_number}) | {district}")
+
+    await message.answer(
+        "\n".join(lines),
+        reply_markup=keyboards.get_admin_keyboard(),
+    )
+
+
+@router.message(F.text == "📩 Новые заявки")
+async def owner_pending_drivers(message: Message):
+    """
+    Список водителей с is_approved=False. Под каждым кнопка «Одобрить».
+    """
+    if not _is_owner(message.from_user.id):
+        return
+
+    try:
+        resp = await get_http_client().get("/taxi/admin/drivers/pending")
+    except Exception as e:
+        logger.error(f"Failed to load pending drivers: {e}")
+        await message.answer(
+            "❌ Не удалось загрузить список заявок.",
+            reply_markup=keyboards.get_admin_keyboard(),
+        )
+        return
+
+    if resp.status_code != 200:
+        await message.answer(
+            "❌ Не удалось загрузить список заявок.",
+            reply_markup=keyboards.get_admin_keyboard(),
+        )
+        return
+
+    drivers = resp.json() or []
+    if not drivers:
+        await message.answer(
+            "📩 Нет новых заявок на одобрение.",
+            reply_markup=keyboards.get_admin_keyboard(),
+        )
+        return
+
+    await message.answer(
+        "📩 Новые заявки на одобрение:",
+        reply_markup=keyboards.get_admin_keyboard(),
+    )
+    for d in drivers:
+        name = d.get("name") or "—"
+        car_model = d.get("car_model") or "—"
+        car_number = d.get("car_number") or "—"
+        text = (
+            f"👤 {name}\n"
+            f"🚗 {car_model} ({car_number})"
+        )
+        kb = keyboards.get_admin_approval_keyboard(d.get("id"))
+        await message.answer(text, reply_markup=kb)
+
+
+@router.message(F.text == "🔙 Назад")
+async def owner_back_to_menu(message: Message, state: FSMContext):
+    """
+    Возврат в главное меню из панели владельца/админки.
+    Приоритетный хендлер — срабатывает в любом состоянии (в т.ч. при вводе ID водителя).
+    """
+    if not _is_owner(message.from_user.id):
+        return
+
+    await state.clear()
+    await message.answer(
+        "Главное меню:",
+        reply_markup=keyboards.get_main_menu(message.from_user.id),
+    )
+
+
+@router.message(F.text == "❌ Удалить водителя (по ID)")
+async def owner_delete_driver_start(message: Message, state: FSMContext):
+    """
+    Запрос ID водителя (telegram_id) для удаления.
+    """
+    if not _is_owner(message.from_user.id):
+        return
+
+    await state.set_state(OwnerDeleteDriver.waiting_for_driver_id)
+    await message.answer(
+        "Введите ID водителя (telegram_id), которого нужно удалить:",
+        reply_markup=keyboards.get_admin_keyboard(),
+    )
+
+
+@router.message(OwnerDeleteDriver.waiting_for_driver_id, F.text)
+async def owner_delete_driver_process_id(message: Message, state: FSMContext):
+    """
+    Обработка введённого ID: запрос к API, показ подтверждения.
+    """
+    if not _is_owner(message.from_user.id):
+        return
+
+    # Если нажали «Назад» или «Отмена» — не ищем водителя, возвращаем в админ-меню
+    if message.text and message.text.strip() in ("🔙 Назад", "❌ Отмена"):
+        await state.clear()
+        await message.answer(
+            "💎 Панель владельца. Выберите действие:",
+            reply_markup=keyboards.get_admin_keyboard(),
+        )
+        return
+
+    raw = message.text.strip()
+    if not raw.isdigit():
+        await message.answer(
+            "❌ Введите числовой ID (telegram_id).",
+            reply_markup=keyboards.get_admin_keyboard(),
+        )
+        return
+
+    tg_id = int(raw)
+    try:
+        resp = await get_http_client().get(f"/taxi/admin/driver/{tg_id}/confirm_info")
+    except Exception as e:
+        logger.error(f"Failed to fetch driver confirm info: {e}")
+        await state.clear()
+        await message.answer(
+            "❌ Не удалось получить данные водителя.",
+            reply_markup=keyboards.get_admin_keyboard(),
+        )
+        return
+
+    if resp.status_code == 404:
+        await message.answer(
+            "❌ Водитель с таким ID не найден.",
+            reply_markup=keyboards.get_admin_keyboard(),
+        )
+        return
+
+    if resp.status_code != 200:
+        await state.clear()
+        await message.answer(
+            "❌ Ошибка при получении данных водителя.",
+            reply_markup=keyboards.get_admin_keyboard(),
+        )
+        return
+
+    data = resp.json()
+    await state.clear()
+
+    name = data.get("name") or "—"
+    car_model = data.get("car_model") or "—"
+    car_number = data.get("car_number") or "—"
+    car_str = f"{car_model} ({car_number})"
+
+    text = (
+        "❓ Подтвердите удаление водителя:\n\n"
+        f"👤 Имя: {name}\n"
+        f"🆔 ID: {tg_id}\n"
+        f"🚗 Авто: {car_str}"
+    )
+    await message.answer(
+        text,
+        reply_markup=keyboards.get_confirm_delete_keyboard(tg_id),
+    )
+
+
+@router.message(F.text == "✅ Одобрить новичков")
+async def admin_approve_novices(message: Message):
+    """
+    Показ списка новых заявок для одобрения (из меню ⚙️ Админка).
+    """
+    if not _is_owner(message.from_user.id):
+        return
+    # Используем ту же логику, что и «📩 Новые заявки»
+    await owner_pending_drivers(message)
+
+
+@router.message(F.text == "👥 Список водителей")
+async def admin_list_drivers(message: Message):
+    """
+    Список водителей для администратора: Имя | Машина | Статус.
+    """
+    if not _is_owner(message.from_user.id):
+        return
+
+    try:
+        resp = await get_http_client().get("/taxi/drivers/all")
+    except Exception as e:
+        logger.error(f"Failed to load drivers list: {e}")
+        await message.answer(
+            "❌ Не удалось загрузить список водителей.",
+            reply_markup=keyboards.get_admin_menu(),
+        )
+        return
+
+    if resp.status_code != 200:
+        await message.answer(
+            "❌ Не удалось загрузить список водителей.",
+            reply_markup=keyboards.get_admin_menu(),
+        )
+        return
+
+    drivers = resp.json() or []
+    if not drivers:
+        await message.answer(
+            "Список водителей пуст.",
+            reply_markup=keyboards.get_admin_menu(),
+        )
+        return
+
+    await message.answer(
+        "👥 Список одобренных водителей:",
+        reply_markup=keyboards.get_admin_menu(),
+    )
+    for d in drivers:
+        status = "Работает" if d.get("current_district") else "Нет"
+        name = d.get("name") or "—"
+        car_model = d.get("car_model") or "—"
+        car_number = d.get("car_number") or "—"
+        tg_id = d.get("telegram_id")
+        if not tg_id:
+            continue
+        text = (
+            f"👤 {name}\n"
+            f"🚗 {car_model} ({car_number})\n"
+            f"📍 Статус: {status}"
+        )
+        kb = InlineKeyboardBuilder()
+        kb.button(
+            text="❌ Уволить",
+            callback_data=f"fire_driver_{tg_id}",
+        )
+        await message.answer(text, reply_markup=kb.as_markup())
+
+
+@router.message(F.text == "▶️ Выйти на смену")
+async def driver_go_online(message: Message, state: FSMContext):
+    """
+    Водитель выходит на смену: сначала просим выбрать район,
+    затем помечаем его как онлайн и сохраняем район.
+    """
+    await state.set_state(DriverShift.waiting_for_district)
+    await message.answer(
+        "Выберите вашу текущую локацию (стоянку):",
+        reply_markup=keyboards.get_driver_districts_keyboard(),
+    )
+
+
+@router.message(F.text == "⏸ Уйти со смены")
+async def driver_go_offline(message: Message):
+    """Водитель уходит со смены: убираем его из локального списка онлайн-водителей."""
+    online_drivers.discard(message.from_user.id)
+    await message.answer(
+        "⏸ Вы ушли со смены. Новые заказы больше не будут приходить в этот чат.",
+        reply_markup=keyboards.get_driver_menu(),
+    )
+
+
+@router.message(DriverShift.waiting_for_district, F.text)
+async def driver_select_district(message: Message, state: FSMContext):
+    """
+    Водитель выбирает район. Сохраняем район в бэкенд и отмечаем водителя онлайн.
+    """
+    text = message.text
+    allowed = {
+        "📍 Губашево": "Губашево",
+        "📍 Проспект": "Проспект",
+        "📍 30-й": "30-й",
+        "📍 Центр": "Центр",
+        "📍 Луч": "Луч",
+        "📍 Берсол": "Берсол",
+        "📍 Владимир": "Владимир",
+        "📍 Титовка (Начало)": "Титовка (Начало)",
+        "📍 Титовка (Конец)": "Титовка (Конец)",
+        "📍 Садовка": "Садовка",
+        "📍 Нагорный": "Нагорный",
+        "📍 Озон": "Озон",
+    }
+    district = allowed.get(text)
+    if not district:
+        await message.answer(
+            "Пожалуйста, выберите стоянку из списка кнопок ниже.",
+            reply_markup=keyboards.get_driver_districts_keyboard(),
+        )
+        return
+
+    try:
+        resp = await get_http_client().post(
+            "/taxi/driver/set_district",
+            json={
+                "telegram_id": message.from_user.id,
+                "district": district,
+            },
+        )
+        if resp.status_code != 200:
+            await message.answer(
+                "❌ Не удалось сохранить район. Попробуйте позже.",
+                reply_markup=keyboards.get_driver_menu(),
+            )
+            return
+    except Exception as e:
+        logger.error(f"Failed to set district for driver {message.from_user.id}: {e}")
+        await message.answer(
+            "❌ Ошибка при сохранении района. Попробуйте позже.",
+            reply_markup=keyboards.get_driver_menu(),
+        )
+        return
+
+    online_drivers.add(message.from_user.id)
+    await state.clear()
+    await message.answer(
+        f"✅ Вы встали в очередь в районе {district}. Ожидайте заказов.",
+        reply_markup=keyboards.get_driver_menu(),
+    )
+
+
 @router.callback_query(F.data == "back_to_menu")
-async def back_to_menu_callback(callback: CallbackQuery):
+async def back_to_menu_callback(callback: CallbackQuery, state: FSMContext):
     """Возврат в главное меню из списка заказов или других экранов."""
+    await state.clear()
     await callback.answer()
     await callback.message.answer(
         "Главное меню. Выберите действие:",
-        reply_markup=keyboards.get_main_menu(),
+        reply_markup=keyboards.get_main_menu(callback.from_user.id),
     )
 
-
-@router.message(OrderTaxi.waiting_for_from_address)
-async def process_from_address(message: Message, state: FSMContext):
-    # Сохраняем ответ пользователя (адрес "откуда") в список на удаление
-    data = await state.get_data()
-    msg_list = data.get("msg_to_delete", [])
-    msg_list.append(message.message_id)
-    print(f"DEBUG: Записываю ID {message.message_id} (ответ from_address) в список на удаление, текущее: {msg_list}")
-    await state.update_data(msg_to_delete=msg_list)
-
-    await state.update_data(from_address=message.text)
-    sent = await message.answer("Куда ехать? 🏁")
-
-    # Сохраняем сообщение "Куда ехать?" в msg_to_delete
-    data = await state.get_data()
-    msg_list = data.get("msg_to_delete", [])
-    msg_list.append(sent.message_id)
-    print(f"DEBUG: Записываю ID {sent.message_id} в список на удаление (process_from_address), текущее: {msg_list}")
-    await state.update_data(msg_to_delete=msg_list)
-
-    await state.set_state(OrderTaxi.waiting_for_to_address)
-
-@router.message(OrderTaxi.waiting_for_to_address)
-async def process_to_address(message: Message, state: FSMContext):
-    # Сохраняем ответ пользователя (адрес "куда") в список на удаление
-    data = await state.get_data()
-    msg_list = data.get("msg_to_delete", [])
-    msg_list.append(message.message_id)
-    print(f"DEBUG: Записываю ID {message.message_id} (ответ to_address) в список на удаление, текущее: {msg_list}")
-    await state.update_data(msg_to_delete=msg_list)
-
-    await state.update_data(to_address=message.text)
-    sent = await message.answer(
-        "Желаете добавить комментарий к заказу? ✍️\n(Например: подъезд 2, детское кресло, багаж)\n\nИли нажмите кнопку ниже, чтобы пропустить. 👇",
-        reply_markup=keyboards.get_skip_comment_keyboard()
-    )
-
-    # Сохраняем сообщение с предложением комментария в msg_to_delete
-    data = await state.get_data()
-    msg_list = data.get("msg_to_delete", [])
-    msg_list.append(sent.message_id)
-    print(f"DEBUG: Записываю ID {sent.message_id} в список на удаление (process_to_address), текущее: {msg_list}")
-    await state.update_data(msg_to_delete=msg_list)
-
-    await state.set_state(OrderTaxi.waiting_for_comment)
 
 @router.callback_query(F.data == "skip_comment", OrderTaxi.waiting_for_comment)
 async def process_skip_comment(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
-    await callback.message.delete()
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
     await finalize_order(callback.message, state, comment=None)
 
-@router.message(OrderTaxi.waiting_for_comment)
-async def process_comment(message: Message, state: FSMContext):
-    # Сохраняем ответ пользователя (комментарий) в список на удаление
-    data = await state.get_data()
-    msg_list = data.get("msg_to_delete", [])
-    msg_list.append(message.message_id)
-    print(f"DEBUG: Записываю ID {message.message_id} (ответ comment) в список на удаление, текущее: {msg_list}")
-    await state.update_data(msg_to_delete=msg_list)
-
-    await finalize_order(message, state, comment=message.text)
 
 async def finalize_order(message: Message, state: FSMContext, comment: str | None = None):
+    # Работаем только в состоянии ожидания комментария (часть процесса ввода адреса/заказа)
+    current_state = await state.get_state() or ""
+    if "waiting_for_comment" not in current_state:
+        return
     data = await state.get_data()
+    # Защита от двойного вызова: один клик = один заказ
+    if data.get("is_processing"):
+        return
+    # Заказ в чат водителей отправляем только если поток запущен с кнопки «Заказать такси».
+    if not data.get("order_started_by_button"):
+        logger.warning(
+            "finalize_order: order_started_by_button missing for user %s, refusing to create order",
+            message.from_user.id,
+        )
+        await state.clear()
+        await message.answer(
+            "Пожалуйста, используйте кнопку «🚕 Заказать такси» в меню для оформления заказа.",
+            reply_markup=keyboards.get_main_menu(message.from_user.id),
+        )
+        return
+
     from_address = data.get('from_address')
     to_address = data.get('to_address')
-    
+
     if not from_address or not to_address:
         await message.answer("❌ Ошибка: адрес отправления или назначения не указан.")
         await state.clear()
         return
 
+    await state.update_data(is_processing=True)
+
     try:
-        logger.debug(f"Creating order for user {message.from_user.id}: {from_address} -> {to_address}")
         response = await get_http_client().post(
             "/taxi/order",
             json={
@@ -317,11 +855,9 @@ async def finalize_order(message: Message, state: FSMContext, comment: str | Non
                 reply_markup=keyboards.get_order_manage_keyboard(order_id)
             )
 
-            # 3) Сохраняем ID сообщения о заказе в список msg_to_delete пассажира
             data = await state.get_data()
             msg_list = data.get("msg_to_delete", [])
             msg_list.append(sent_msg.message_id)
-            print(f"DEBUG: Записываю ID {sent_msg.message_id} (сообщение 'Заказ создан') в список на удаление, текущее: {msg_list}")
             await state.update_data(msg_to_delete=msg_list)
 
             # Отправка в чат водителей
@@ -339,19 +875,43 @@ async def finalize_order(message: Message, state: FSMContext, comment: str | Non
                     driver_msg,
                     reply_markup=keyboards.get_accept_order_keyboard(order_id)
                 )
+                # Дублируем заказ всем водителям, которые вышли на смену, в личные сообщения
+                for driver_tg_id in list(online_drivers):
+                    try:
+                        await message.bot.send_message(
+                            chat_id=driver_tg_id,
+                            text=driver_msg,
+                            reply_markup=keyboards.get_accept_order_keyboard(order_id),
+                        )
+                    except Exception as e:
+                        logger.error(f"Не удалось отправить заказ водителю {driver_tg_id}: {e}")
             except Exception as e:
                 logger.error(f"Ошибка отправки в чат водителей ({settings.DRIVER_CHAT_ID}): {e}")
+            # Полная очистка состояния после создания заказа — один клик = один заказ
+            await state.clear()
         else:
             error_detail = response.text
             logger.error(f"Ошибка API (Order): {response.status_code} - {error_detail}")
+            print(f"[API] Order 500/error: {response.status_code} - {error_detail}", flush=True)
             await message.answer(f"❌ Ошибка на стороне сервера (Status {response.status_code}). Попробуйте позже.")
-                
-    except httpx.ConnectError:
-        logger.error(f"Connection error to {settings.API_BASE_URL}")
+            await state.clear()
+
+    except httpx.ConnectError as e:
+        logger.error(f"Connection error to {settings.API_BASE_URL}: {e}")
+        print(f"[API] ConnectionError: {e}", flush=True)
         await message.answer("❌ Не удалось связаться с сервером. Убедитесь, что Бэкенд запущен.")
+        await state.clear()
+    except httpx.TimeoutException as e:
+        logger.error(f"Timeout talking to {settings.API_BASE_URL}: {e}")
+        print(f"[API] Timeout: {e}", flush=True)
+        await message.answer("❌ Сервер не отвечает вовремя. Попробуйте позже.")
+        await state.clear()
     except Exception as e:
         logger.exception(f"Критическая ошибка при заказе: {e}")
+        import traceback
+        print(f"[API] Order exception: {e}\n{traceback.format_exc()}", flush=True)
         await message.answer(f"❌ Произошла непредвиденная ошибка: {e}")
+        await state.clear()
 
 @router.callback_query(F.data.startswith("accept_"))
 async def accept_order_callback(callback: CallbackQuery, state: FSMContext):
@@ -374,13 +934,12 @@ async def accept_order_callback(callback: CallbackQuery, state: FSMContext):
             # Краткое подтверждение в чате, где нажата кнопка (группа водителей)
             await callback.answer("Вы приняли заказ! ✅")
             try:
-                # Помечаем заказ в группе как принятый и убираем кнопки
                 await callback.message.edit_text(
                     f"🚕 Заказ #{order_id} принят водителем {callback.from_user.full_name}.",
                     reply_markup=None,
                 )
-            except Exception as e:
-                logger.exception(f"Error editing group message after accept for order {order_id}: {e}")
+            except Exception:
+                pass
 
             # Отправляем карточку заказа в ЛИЧНЫЕ сообщения водителю
             try:
@@ -428,7 +987,6 @@ async def accept_order_callback(callback: CallbackQuery, state: FSMContext):
                         reply_markup=keyboards.get_client_after_accept_keyboard(order_id),
                     )
 
-                    # 3) Сохраняем ID этого сообщения пассажиру — оно тоже часть "чека"
                     p_state = _get_passenger_state(callback.bot, state.storage, client_chat_id)
                     pdata = await p_state.get_data()
                     to_del = pdata.get("msg_to_delete", [])
@@ -469,8 +1027,8 @@ async def complete_order_callback(callback: CallbackQuery, state: FSMContext):
         # Сначала пробуем удалить само сообщение с кнопкой "Завершить", если оно ещё существует
         try:
             await callback.message.delete()
-        except Exception as e:
-            logger.exception(f"Error deleting driver 'complete' message for order {order_id}: {e}")
+        except Exception:
+            pass
 
         # Пытаемся удалить предыдущее уведомление "клиент выходит", если оно было
         try:
@@ -482,10 +1040,10 @@ async def complete_order_callback(callback: CallbackQuery, state: FSMContext):
                         chat_id=callback.from_user.id,
                         message_id=out_msg_id,
                     )
-                except Exception as e:
-                    logger.exception(f"Error deleting last_out_msg_id {out_msg_id}: {e}")
-        except Exception as e:
-            logger.exception(f"Error reading state in complete_order_callback: {e}")
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
         response = await get_http_client().post(f"/taxi/order/{order_id}/complete")
         
@@ -499,26 +1057,17 @@ async def complete_order_callback(callback: CallbackQuery, state: FSMContext):
                     p_state = _get_passenger_state(callback.bot, state.storage, client_chat_id)
                     p_data = await p_state.get_data()
                     msg_to_delete = p_data.get("msg_to_delete") or []
-
-                    if not msg_to_delete:
-                        print(f"FATAL ERROR: msg_to_delete is EMPTY for passenger {client_chat_id}")
-                    else:
-                        print(f"DEBUG: Начинаю удаление для пассажира {client_chat_id}. Список ID: {msg_to_delete}")
-                        # Удаляем все сообщения из списка
-                        for mid in msg_to_delete:
+                    if msg_to_delete:
+                        async def _delete_one(bot, chat_id, mid):
                             try:
-                                await callback.bot.delete_message(
-                                    chat_id=client_chat_id,
-                                    message_id=mid,
-                                )
-                                print(f"DEBUG: Удалено сообщение {mid}")
-                            except Exception as e:
-                                print(f"DEBUG: Ошибка удаления {mid}: {e}")
+                                await bot.delete_message(chat_id=chat_id, message_id=mid)
+                            except Exception:
+                                pass
+                        await asyncio.gather(
+                            *[_delete_one(callback.bot, client_chat_id, mid) for mid in msg_to_delete]
+                        )
 
-                    # Получаем данные заказа для красивого "чека"
-                    order_resp = await get_http_client().get(f"/taxi/order/{order_id}")
-                    ord_data = order_resp.json() if order_resp.status_code == 200 else {}
-                    print(f"DEBUG: Данные заказа: {ord_data}")
+                    ord_data = data
 
                     if not ord_data:
                         logger.error(f"ORD_DATA пустой при завершении заказа {order_id}")
@@ -554,18 +1103,23 @@ async def complete_order_callback(callback: CallbackQuery, state: FSMContext):
                     logger.exception(f"Error sending 'trip completed' (receipt) message to client {client_chat_id}: {e}")
 
             await callback.answer("Заказ завершен! Отличная работа 👍")
-            # Удаляем кнопку "Завершить" у водителя и отправляем ему уведомление с номером заказа и суммой
             try:
                 await callback.message.delete()
             except Exception:
                 pass
-            order_resp = await get_http_client().get(f"/taxi/order/{order_id}")
-            ord_data = order_resp.json() if order_resp.status_code == 200 else {}
-            price = ord_data.get("price")
+            price = data.get("price")
             price_str = f"{price:.0f} руб." if price is not None else "—"
             await callback.bot.send_message(
                 callback.from_user.id,
                 f"✅ Заказ №{order_id} успешно завершен!\n💰 Сумма к оплате: {price_str}",
+            )
+
+            # После завершения заказа просим водителя указать актуальную стоянку
+            await state.set_state(DriverShift.waiting_for_district)
+            await callback.bot.send_message(
+                chat_id=callback.from_user.id,
+                text="Выберите вашу текущую локацию (стоянку):",
+                reply_markup=keyboards.get_driver_districts_keyboard(),
             )
         else:
             # Попробуем достать detail
@@ -585,9 +1139,29 @@ async def complete_order_callback(callback: CallbackQuery, state: FSMContext):
         logger.exception(f"Error in complete_order_callback: {e}")
         await callback.answer("❌ Ошибка при завершении заказа", show_alert=True)
 
+@router.callback_query(F.data == "cancel_delete")
+async def cancel_delete_driver_callback(callback: CallbackQuery):
+    """
+    Отмена удаления водителя.
+    """
+    if not _is_owner(callback.from_user.id):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+
+    try:
+        await callback.message.edit_text("Сброшено. Водитель не удален")
+    except Exception:
+        pass
+    await callback.answer("Отменено", show_alert=False)
+    await callback.message.answer(
+        "💎 Панель владельца. Выберите действие:",
+        reply_markup=keyboards.get_admin_keyboard(),
+    )
+
+
 @router.callback_query(F.data.startswith("cancel_"))
 async def cancel_order_callback(callback: CallbackQuery):
-    # callback.data имеет вид "cancel_{order_id}"
+    # callback.data имеет вид "cancel_{order_id}" (не cancel_delete)
     order_id = int(callback.data.split("_")[-1])
     
     try:
@@ -598,9 +1172,12 @@ async def cancel_order_callback(callback: CallbackQuery):
         
         if response.status_code == 200:
             await callback.answer("Заказ отменен ❌")
-            await callback.message.edit_text(
-                f"❌ Заказ #{order_id} был отменен вами."
-            )
+            try:
+                await callback.message.edit_text(
+                    f"❌ Заказ #{order_id} был отменен вами."
+                )
+            except Exception:
+                pass
         else:
             await callback.answer("Ошибка при отмене: заказ уже принят или не найден", show_alert=True)
     except Exception as e:
@@ -608,6 +1185,9 @@ async def cancel_order_callback(callback: CallbackQuery):
         await callback.answer("❌ Ошибка при отмене заказа", show_alert=True)
 @router.callback_query(F.data.startswith("approve_"))
 async def approve_driver_callback(callback: CallbackQuery):
+    if not _is_owner(callback.from_user.id):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
     driver_id = int(callback.data.split("_")[1])
     try:
         response = await get_http_client().post(f"/taxi/driver/{driver_id}/approve")
@@ -617,7 +1197,10 @@ async def approve_driver_callback(callback: CallbackQuery):
                 data['telegram_id'],
                 "✅ Ваша заявка одобрена! Теперь вы можете принимать заказы."
             )
-            await callback.message.edit_text(callback.message.text + "\n\n✅ Одобрен")
+            try:
+                await callback.message.edit_text(callback.message.text + "\n\n✅ Одобрен")
+            except Exception:
+                pass
         else:
             await callback.answer("Ошибка при одобрении", show_alert=True)
     except Exception as e:
@@ -626,6 +1209,9 @@ async def approve_driver_callback(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("reject_"))
 async def reject_driver_callback(callback: CallbackQuery):
+    if not _is_owner(callback.from_user.id):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
     driver_id = int(callback.data.split("_")[1])
     try:
         response = await get_http_client().post(f"/taxi/driver/{driver_id}/reject")
@@ -635,26 +1221,93 @@ async def reject_driver_callback(callback: CallbackQuery):
                 data['telegram_id'],
                 "❌ Ваша заявка на регистрацию водителем отклонена."
             )
-            await callback.message.edit_text(callback.message.text + "\n\n❌ Отклонен")
+            try:
+                await callback.message.edit_text(callback.message.text + "\n\n❌ Отклонен")
+            except Exception:
+                pass
         else:
             await callback.answer("Ошибка при отклонении", show_alert=True)
     except Exception as e:
         logger.exception(f"Error in reject_driver_callback: {e}")
         await callback.answer("❌ Ошибка при отклонении водителя", show_alert=True)
 
+
+@router.callback_query(F.data.startswith("confirm_delete_"))
+async def confirm_delete_driver_callback(callback: CallbackQuery):
+    """
+    Подтверждение удаления водителя: «Да, удалить».
+    """
+    if not _is_owner(callback.from_user.id):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+
+    tg_id = int(callback.data.split("_")[-1])
+    try:
+        resp = await get_http_client().delete(f"/taxi/admin/driver/{tg_id}")
+        if resp.status_code == 200:
+            data = resp.json()
+            try:
+                await callback.bot.send_message(
+                    data["telegram_id"],
+                    "❌ Вы были удалены из списка водителей CHVK City.",
+                )
+            except Exception:
+                pass
+            try:
+                await callback.message.edit_text("✅ Водитель успешно удален")
+            except Exception:
+                pass
+            await callback.answer("Водитель удалён", show_alert=False)
+        else:
+            await callback.answer("Ошибка при удалении водителя", show_alert=True)
+    except Exception as e:
+        logger.exception(f"Error in confirm_delete_driver_callback: {e}")
+        await callback.answer("❌ Ошибка при удалении водителя", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("fire_driver_"))
+async def fire_driver_callback(callback: CallbackQuery):
+    """
+    Увольнение/удаление водителя из админ-панели.
+    """
+    if not _is_owner(callback.from_user.id):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+
+    driver_tg_id = int(callback.data.split("_")[-1])
+    try:
+        response = await get_http_client().delete(f"/taxi/admin/driver/{driver_tg_id}")
+        if response.status_code == 200:
+            data = response.json()
+            # Уведомляем водителя
+            try:
+                await callback.bot.send_message(
+                    data["telegram_id"],
+                    "❌ Вы были удалены из списка водителей CHVK City.",
+                )
+            except Exception:
+                pass
+            try:
+                await callback.message.edit_text(callback.message.text + "\n\n❌ Водитель уволен")
+            except Exception:
+                pass
+            await callback.answer("Водитель уволен", show_alert=False)
+        else:
+            await callback.answer("Ошибка при увольнении водителя", show_alert=True)
+    except Exception as e:
+        logger.exception(f"Error in fire_driver_callback: {e}")
+        await callback.answer("❌ Ошибка при увольнении водителя", show_alert=True)
+
 @router.callback_query(F.data.startswith("ignore_"))
 async def ignore_order_callback(callback: CallbackQuery):
-    # Just delete the message for this driver
-    await callback.message.delete()
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
     await callback.answer("Заказ скрыт")
 
 @router.callback_query(F.data.startswith("at_place_"))
 async def at_place_callback(callback: CallbackQuery, state: FSMContext):
-    # DEBUG‑лог, чтобы убедиться, что хендлер вообще срабатывает
-    print(f"DEBUG: at_place_callback triggered, raw data={callback.data}")
-    logger.debug(f"at_place_callback triggered, raw data={callback.data}")
-
-    # callback.data имеет вид "at_place_{order_id}", поэтому берём последний элемент
     order_id = int(callback.data.split("_")[-1])
     try:
         # Обновляем статус заказа на стороне бэкенда и получаем данные клиента
@@ -682,7 +1335,6 @@ async def at_place_callback(callback: CallbackQuery, state: FSMContext):
                         text,
                         reply_markup=keyboards.get_client_at_place_keyboard(order_id, driver_phone),
                     )
-                    # 3) Добавить это сообщение в список msg_to_delete и сохранить ID для удаления при старте поездки
                     p_state = _get_passenger_state(callback.bot, state.storage, client_chat_id)
                     pdata = await p_state.get_data()
                     to_del = pdata.get("msg_to_delete", [])
@@ -696,11 +1348,14 @@ async def at_place_callback(callback: CallbackQuery, state: FSMContext):
 
             # Сообщение водителю
             await callback.answer("Вы отметили, что на месте ✅")
-            await callback.message.edit_text(
-                f"🚕 Вы на месте по заказу #{order_id}.\n\n"
-                "Ожидаем клиента. Нажмите 'Начать поездку', когда он сядет в машину.",
-                reply_markup=keyboards.get_at_place_driver_keyboard(order_id),
-            )
+            try:
+                await callback.message.edit_text(
+                    f"🚕 Вы на месте по заказу #{order_id}.\n\n"
+                    "Ожидаем клиента. Нажмите 'Начать поездку', когда он сядет в машину.",
+                    reply_markup=keyboards.get_at_place_driver_keyboard(order_id),
+                )
+            except Exception:
+                pass
         else:
             await callback.answer("Ошибка при получении данных заказа", show_alert=True)
     except Exception as e:
@@ -742,7 +1397,6 @@ async def client_out_callback(callback: CallbackQuery, state: FSMContext):
                         )
                         # Сохраняем ID уведомления, чтобы потом его удалить при начале/завершении поездки.
                         # ВАЖНО: сохраняем его в FSM-контексте ИМЕННО водителя, а не клиента.
-                        print(f"DEBUG: Сохраняем для удаления msg_id={sent.message_id} для водителя {driver_chat_id}")
                         driver_key = StorageKey(
                             bot_id=callback.bot.id,
                             chat_id=driver_chat_id,
@@ -761,14 +1415,13 @@ async def client_out_callback(callback: CallbackQuery, state: FSMContext):
                     "✅ Водитель уведомлен. Пожалуйста, выходите к машине. Приятного пути! 🚕",
                     reply_markup=keyboards.get_client_after_out_keyboard(order_id),
                 )
-                # 3) Добавить id этого сообщения пассажиру в список msg_to_delete
                 p_state = _get_passenger_state(callback.bot, state.storage, callback.from_user.id)
                 pdata = await p_state.get_data()
                 to_del = pdata.get("msg_to_delete", [])
                 to_del.append(mobj.message_id if hasattr(mobj, "message_id") else callback.message.message_id)
                 await p_state.update_data(msg_to_delete=to_del)
-            except Exception as e:
-                logger.exception(f"Error editing client 'out' message: {e}")
+            except Exception:
+                pass
         else:
             logger.error(
                 "Ошибка получения заказа при client_out: %s %s",
@@ -856,11 +1509,13 @@ async def driver_cancel_callback(callback: CallbackQuery):
                 except Exception as e:
                     logger.exception(f"Error sending 'driver cancelled' message to client {client_chat_id}: {e}")
 
-            # Сообщение водителю и обновление интерфейса
             await callback.answer("Поездка отменена. Заказ снова доступен другим водителям.", show_alert=True)
-            await callback.message.edit_text(
-                f"❌ Вы отменили заказ #{order_id}. Заказ возвращён в общий список.",
-            )
+            try:
+                await callback.message.edit_text(
+                    f"❌ Вы отменили заказ #{order_id}. Заказ возвращён в общий список.",
+                )
+            except Exception:
+                pass
         else:
             # Попробуем показать detail из ответа
             detail_msg = None
@@ -905,10 +1560,10 @@ async def start_trip_callback(callback: CallbackQuery, state: FSMContext):
                     )
                     # очищаем ID, чтобы не пытаться удалить повторно
                     await state.update_data(last_out_msg_id=None)
-                except Exception as e:
-                    logger.exception(f"Error deleting last_out_msg_id {out_msg_id} in start_trip_callback: {e}")
-        except Exception as e:
-            logger.exception(f"Error reading state in start_trip_callback: {e}")
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
         response = await get_http_client().post(f"/taxi/order/{order_id}/start")
         if response.status_code == 200:
@@ -916,12 +1571,14 @@ async def start_trip_callback(callback: CallbackQuery, state: FSMContext):
             client_chat_id = data.get("client_telegram_id")
             to_address = data.get("to_address", "Адрес не указан")
 
-            # Обновляем сообщение водителя
-            await callback.message.edit_text(
-                "🚕 ПОЕЗДКА НАЧАТА.\n\n"
-                "Ожидайте указаний по маршруту и следуйте к точке назначения.",
-                reply_markup=keyboards.get_in_progress_driver_keyboard(order_id, to_address),
-            )
+            try:
+                await callback.message.edit_text(
+                    "🚕 ПОЕЗДКА НАЧАТА.\n\n"
+                    "Ожидайте указаний по маршруту и следуйте к точке назначения.",
+                    reply_markup=keyboards.get_in_progress_driver_keyboard(order_id, to_address),
+                )
+            except Exception:
+                pass
             await callback.answer("Поездка начата 🚕")
 
             # Уведомляем клиента: удаляем сообщение «Водитель на месте» (или убираем кнопки), затем отправляем новое
@@ -936,18 +1593,15 @@ async def start_trip_callback(callback: CallbackQuery, state: FSMContext):
                                 chat_id=client_chat_id,
                                 message_id=waiting_message_id,
                             )
-                        except Exception as e:
+                        except Exception:
                             try:
                                 await callback.bot.edit_message_reply_markup(
                                     chat_id=client_chat_id,
                                     message_id=waiting_message_id,
                                     reply_markup=None,
                                 )
-                            except Exception as e2:
-                                logger.warning(
-                                    "Could not delete or edit waiting message %s for client %s: %s; %s",
-                                    waiting_message_id, client_chat_id, e, e2,
-                                )
+                            except Exception:
+                                pass
                         await p_state.update_data(waiting_message_id=None)
 
                     sent = await callback.bot.send_message(
@@ -992,12 +1646,12 @@ async def start_new_order_callback(callback: CallbackQuery, state: FSMContext):
     # Шаг 1: убираем кнопку "Заказать новое такси" у старого сообщения, текст с оценкой не трогаем
     try:
         await callback.message.edit_reply_markup(reply_markup=None)
-    except Exception as e:
-        logger.exception(f"Error editing reply markup in start_new_order_callback: {e}")
+    except Exception:
+        pass
 
     # Шаг 2: отправляем новое сообщение для ввода адреса
     try:
-        await callback.message.answer(
+        prompt = await callback.message.answer(
             "Отлично! Начинаем новый заказ. 🚕\n\n"
             "Напишите адрес, откуда вас забрать: 📍",
         )
@@ -1008,6 +1662,13 @@ async def start_new_order_callback(callback: CallbackQuery, state: FSMContext):
 
     # Шаг 3: переводим в состояние ожидания адреса 'откуда'
     await state.set_state(OrderTaxi.waiting_for_from_address)
+    # Помечаем, что заказ запущен из управляемой точки (кнопка), и начинаем новый список сообщений на удаление
+    await state.update_data(
+        order_started_by_button=True,
+        msg_to_delete=[prompt.message_id],
+        from_address=None,
+        to_address=None,
+    )
 
 @router.callback_query(F.data.startswith("rate_"))
 async def rate_trip_callback(callback: CallbackQuery):
@@ -1037,12 +1698,15 @@ async def rate_trip_callback(callback: CallbackQuery):
             "🙏 Спасибо за отзыв! Теперь вы можете заказать новую машину."
         )
 
-        await callback.message.edit_text(
-            new_text,
-            reply_markup=None,  # убираем звёзды, не дублируем кнопку заказа
-        )
+        try:
+            await callback.message.edit_text(
+                new_text,
+                reply_markup=None,
+            )
+        except Exception:
+            pass
     except Exception as e:
-        logger.exception(f"Error editing rating message: {e}")
+        logger.exception(f"Error in rate_trip_callback: {e}")
 
     # Дополнительно уведомляем водителя об оценке
     try:
@@ -1077,29 +1741,38 @@ async def rate_trip_callback(callback: CallbackQuery):
     except Exception as e:
         logger.exception(f"Error fetching order for rating notification: {e}")
 
+# Последний хендлер в файле — блокировщик: если бот в любом состоянии (ждёт адрес и т.д.), не трогаем сообщение
+
+# Кнопки, сообщения с которыми НЕ удаляем (админка/меню)
+_ADMIN_SAFE_TEXTS = {
+    "🚕 Заказать такси",
+    "🗂 Мои заказы",
+    "📞 Поддержка",
+    "💼 Кабинет водителя",
+    "⚙️ Админка",
+    "💎 УПРАВЛЕНИЕ",
+    "👥 Водители в штате",
+    "📩 Новые заявки",
+    "❌ Удалить водителя (по ID)",
+    "🔙 Назад",
+    "👥 Список водителей",
+    "✅ Одобрить новичков",
+    "❌ Уволить водителя",
+    "📊 Статистика заказов",
+    "▶️ Выйти на смену",
+    "⏸ Уйти со смены",
+}
+
 @router.message()
-async def dbg_echo(message: Message, state: FSMContext):
-    """
-    Обработка прочих текстовых сообщений.
-    - Если пользователь находится в процессе оформления заказа (есть активное состояние FSM),
-      не засоряем чат лишними ответами.
-    - Если состояние не активно, мягко подсказываем использовать главное меню.
-    """
-    data = await state.get_data()
-    current_state = await state.get_state()
+async def smart_delete_handler(message: Message, state: FSMContext):
+    state_now = await state.get_state()
+    if state_now is not None:
+        return  # Если бот в любом состоянии (ждёт адрес, телефон, комментарий) — этот код НЕ должен работать!
 
-    # Если есть активное состояние (пользователь в процессе сценария) — просто игнорируем сообщение
-    if current_state is not None:
-        logger.debug(
-            "Ignoring free-text message '%s' from %s in state %s",
-            message.text,
-            message.from_user.id,
-            current_state,
-        )
-        return
+    if message.text and message.text in _ADMIN_SAFE_TEXTS:
+        return  # Кнопки меню и админки не удаляем
 
-    # Вне сценария: предлагаем воспользоваться главным меню
-    await message.answer(
-        "Чтобы вызвать машину, воспользуйтесь кнопкой '🚕 Заказать такси' в меню ниже👇",
-        reply_markup=keyboards.get_main_menu(),
-    )
+    try:
+        await message.delete()
+    except Exception:
+        pass

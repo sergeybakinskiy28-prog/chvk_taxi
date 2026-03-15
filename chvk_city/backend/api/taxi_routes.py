@@ -47,6 +47,28 @@ class OrderHistoryItem(BaseModel):
     to_address: str
     price: float | None
 
+
+class DriverInfo(BaseModel):
+    id: int
+    telegram_id: int
+    is_approved: bool
+    car_model: str
+    car_number: str
+
+
+class DriverDistrictUpdate(BaseModel):
+    telegram_id: int
+    district: str
+
+
+class DriverListItem(BaseModel):
+    id: int
+    name: str | None
+    car_model: str
+    car_number: str
+    current_district: str | None
+    telegram_id: int | None = None
+
 @router.post("/user/update_phone")
 async def update_user_phone(data: UserUpdatePhone, db: AsyncSession = Depends(get_db)):
     success = await TaxiService.update_user_phone(db, data.telegram_id, data.phone)
@@ -57,7 +79,7 @@ async def update_user_phone(data: UserUpdatePhone, db: AsyncSession = Depends(ge
 @router.post("/user/register")
 async def register_user(user_data: UserRegister, db: AsyncSession = Depends(get_db)):
     user = await TaxiService.get_or_create_user(db, user_data.telegram_id, user_data.name)
-    return user
+    return {"id": user.id, "telegram_id": user.telegram_id, "name": user.name}
 
 
 @router.get("/user/{telegram_id}")
@@ -75,6 +97,152 @@ async def get_user(telegram_id: int, db: AsyncSession = Depends(get_db)):
         "name": user.name,
         "phone": user.phone,
     }
+
+
+@router.get("/driver/by_telegram/{telegram_id}", response_model=DriverInfo)
+async def get_driver_by_telegram(telegram_id: int, db: AsyncSession = Depends(get_db)):
+    """
+    Возвращает информацию о водителе по его telegram_id.
+    Используется ботом для проверки, зарегистрирован ли пользователь как водитель.
+    """
+    result = await db.execute(
+        select(Driver, User).join(User).where(User.telegram_id == telegram_id)
+    )
+    row = result.one_or_none()
+    if not row:
+        raise HTTPException(status_code=404, detail="Водитель не найден")
+
+    driver, user = row
+    return DriverInfo(
+        id=driver.id,
+        telegram_id=user.telegram_id,
+        is_approved=driver.is_approved,
+        car_model=driver.car_model,
+        car_number=driver.car_number,
+    )
+
+
+@router.post("/driver/set_district")
+async def set_driver_district(data: DriverDistrictUpdate, db: AsyncSession = Depends(get_db)):
+    """
+    Сохраняет выбранный водителем район в поле current_district модели Driver.
+    """
+    result = await db.execute(
+        select(Driver, User).join(User).where(User.telegram_id == data.telegram_id)
+    )
+    row = result.one_or_none()
+    if not row:
+        raise HTTPException(status_code=404, detail="Водитель не найден")
+
+    driver, user = row
+
+    driver.current_district = data.district
+
+    try:
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
+
+    return {
+        "status": "success",
+        "message": f"Вы встали в очередь: {data.district}",
+    }
+
+
+@router.get("/admin/drivers/pending", response_model=list[DriverListItem])
+async def get_pending_drivers(db: AsyncSession = Depends(get_db)):
+    """
+    Список водителей с is_approved=False (новые заявки на одобрение).
+    """
+    result = await db.execute(
+        select(Driver, User)
+        .join(User, Driver.user_id == User.id)
+        .where(Driver.is_approved.is_(False))
+    )
+    rows = result.all()
+    items: list[DriverListItem] = []
+    for driver, user in rows:
+        items.append(
+            DriverListItem(
+                id=driver.id,
+                name=user.name,
+                car_model=driver.car_model,
+                car_number=driver.car_number,
+                current_district=driver.current_district,
+                telegram_id=user.telegram_id,
+            )
+        )
+    return items
+
+
+@router.get("/drivers/all", response_model=list[DriverListItem])
+async def get_all_drivers(db: AsyncSession = Depends(get_db)):
+    """
+    Список всех ОДОБРЕННЫХ водителей для панели администратора.
+    """
+    result = await db.execute(
+        select(Driver, User)
+        .join(User, Driver.user_id == User.id)
+        .where(Driver.is_approved.is_(True))
+    )
+    rows = result.all()
+    items: list[DriverListItem] = []
+    for driver, user in rows:
+        items.append(
+            DriverListItem(
+                id=driver.id,
+                name=user.name,
+                car_model=driver.car_model,
+                car_number=driver.car_number,
+                current_district=driver.current_district,
+                telegram_id=user.telegram_id,
+            )
+        )
+    return items
+
+
+@router.get("/admin/driver/{tg_id}/confirm_info")
+async def get_driver_confirm_info(tg_id: int, db: AsyncSession = Depends(get_db)):
+    """
+    Информация о водителе для подтверждения удаления: имя, username, авто.
+    """
+    result = await db.execute(
+        select(Driver, User)
+        .join(User, Driver.user_id == User.id)
+        .where(User.telegram_id == tg_id)
+    )
+    row = result.one_or_none()
+    if not row:
+        raise HTTPException(status_code=404, detail="Водитель не найден")
+
+    driver, user = row
+    return {
+        "telegram_id": user.telegram_id,
+        "name": user.name or "—",
+        "car_model": driver.car_model,
+        "car_number": driver.car_number,
+    }
+
+
+@router.delete("/admin/driver/{tg_id}")
+async def admin_delete_driver(tg_id: int, db: AsyncSession = Depends(get_db)):
+    """
+    Удаление/увольнение водителя по telegram_id для владельца/админа.
+    """
+    result = await db.execute(
+        select(Driver, User).join(User, Driver.user_id == User.id).where(User.telegram_id == tg_id)
+    )
+    row = result.one_or_none()
+    if not row:
+        raise HTTPException(status_code=404, detail="Водитель не найден")
+
+    driver, user = row
+    success = await TaxiService.reject_driver(db, driver.id)
+    if not success:
+        raise HTTPException(status_code=400, detail="Не удалось удалить водителя")
+
+    return {"status": "deleted", "telegram_id": user.telegram_id}
 
 @router.post("/driver/register")
 async def register_driver(driver_data: DriverRegister, db: AsyncSession = Depends(get_db)):
@@ -129,21 +297,40 @@ async def complete_order(order_id: int, db: AsyncSession = Depends(get_db)):
     if not success:
         raise HTTPException(status_code=400, detail="Не удалось завершить заказ")
 
-    # Получаем данные клиента для последующих уведомлений
-    result = await db.execute(select(Order).where(Order.id == order_id))
-    order = result.scalar_one_or_none()
-    if not order:
+    result = await db.execute(
+        select(Order, User)
+        .join(User, Order.user_id == User.id)
+        .where(Order.id == order_id)
+    )
+    row = result.one_or_none()
+    if not row:
         raise HTTPException(status_code=404, detail="Заказ не найден после завершения")
 
-    user_result = await db.execute(select(User).where(User.id == order.user_id))
-    user = user_result.scalar_one()
-
-    return {
+    order, client_user = row
+    out = {
         "status": "completed",
-        "client_telegram_id": user.telegram_id,
+        "client_telegram_id": client_user.telegram_id,
         "from_address": order.from_address,
         "to_address": order.to_address,
+        "price": order.price,
     }
+    if order.driver_id is not None:
+        dr_result = await db.execute(
+            select(Driver, User)
+            .join(User, Driver.user_id == User.id)
+            .where(Driver.id == order.driver_id)
+        )
+        dr_row = dr_result.one_or_none()
+        if dr_row:
+            driver, driver_user = dr_row
+            out["driver_name"] = driver_user.name or "R S"
+            out["car_model"] = driver.car_model
+            out["car_number"] = driver.car_number
+    if "driver_name" not in out:
+        out["driver_name"] = "R S"
+        out["car_model"] = "Гранта"
+        out["car_number"] = "255"
+    return out
 
 
 @router.post("/order/{order_id}/at_place")

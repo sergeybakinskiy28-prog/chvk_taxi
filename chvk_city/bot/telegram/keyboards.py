@@ -1,13 +1,75 @@
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 import urllib.parse
 
-def get_main_menu():
+from chvk_city.bot.telegram.constants import OWNER_ID
+
+def get_main_menu(user_id: int | None = None):
     buttons = [
         [KeyboardButton(text="🚕 Заказать такси")],
         [KeyboardButton(text="🗂 Мои заказы")],
-        [KeyboardButton(text="ℹ️ Помощь")]
+        [KeyboardButton(text="📞 Поддержка")],
+        [KeyboardButton(text="💼 Кабинет водителя")],
     ]
-    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+    if user_id == OWNER_ID:
+        buttons.append([KeyboardButton(text="💎 УПРАВЛЕНИЕ")])
+    return ReplyKeyboardMarkup(
+        keyboard=buttons,
+        resize_keyboard=True,
+        is_persistent=True,
+        input_field_placeholder="УПРАВЛЕНИЕ КНОПКАМИ 👇",
+    )
+
+
+def get_driver_menu():
+    """
+    Главное меню водителя: выход/уход со смены.
+    """
+    buttons = [
+        [KeyboardButton(text="▶️ Выйти на смену")],
+        [KeyboardButton(text="⏸ Уйти со смены")],
+    ]
+    return ReplyKeyboardMarkup(
+        keyboard=buttons,
+        resize_keyboard=True,
+        is_persistent=True,
+        input_field_placeholder="Режим работы водителя 👇",
+    )
+
+
+def get_admin_menu():
+    """
+    Меню администратора.
+    """
+    buttons = [
+        [KeyboardButton(text="👥 Список водителей")],
+        [KeyboardButton(text="✅ Одобрить новичков")],
+        [KeyboardButton(text="❌ Уволить водителя")],
+        [KeyboardButton(text="📊 Статистика заказов")],
+    ]
+    return ReplyKeyboardMarkup(
+        keyboard=buttons,
+        resize_keyboard=True,
+        is_persistent=True,
+        input_field_placeholder="Админ-панель 👇",
+    )
+
+
+def get_admin_keyboard():
+    """
+    Клавиатура владельца (управление).
+    """
+    buttons = [
+        [KeyboardButton(text="👥 Водители в штате")],
+        [KeyboardButton(text="📩 Новые заявки")],
+        [KeyboardButton(text="❌ Удалить водителя (по ID)")],
+        [KeyboardButton(text="🔙 Назад")],
+    ]
+    return ReplyKeyboardMarkup(
+        keyboard=buttons,
+        resize_keyboard=True,
+        is_persistent=True,
+        input_field_placeholder="Управление сервисом 👇",
+    )
 
 
 def get_back_to_menu_keyboard():
@@ -84,6 +146,27 @@ def get_in_progress_driver_keyboard(order_id: int, to_address: str):
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+def get_driver_districts_keyboard():
+    """
+    Клавиатура выбора стоянки/района для водителя.
+    Кнопки по 2 в ряд.
+    """
+    rows = [
+        [KeyboardButton(text="📍 Губашево"), KeyboardButton(text="📍 Проспект")],
+        [KeyboardButton(text="📍 30-й"), KeyboardButton(text="📍 Центр")],
+        [KeyboardButton(text="📍 Луч"), KeyboardButton(text="📍 Берсол")],
+        [KeyboardButton(text="📍 Владимир"), KeyboardButton(text="📍 Титовка (Начало)")],
+        [KeyboardButton(text="📍 Титовка (Конец)"), KeyboardButton(text="📍 Садовка")],
+        [KeyboardButton(text="📍 Нагорный"), KeyboardButton(text="📍 Озон")],
+    ]
+    return ReplyKeyboardMarkup(
+        keyboard=rows,
+        resize_keyboard=True,
+        is_persistent=True,
+        input_field_placeholder="Выберите стоянку 👇",
+    )
+
+
 def get_driver_accept_keyboard(order_id: int, from_address: str) -> InlineKeyboardMarkup:
     """
     Клавиатура для водителя сразу после принятия заказа:
@@ -103,6 +186,15 @@ def get_admin_approval_keyboard(driver_id: int):
     buttons = [
         [InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"approve_{driver_id}")],
         [InlineKeyboardButton(text="❌ Отклонить", callback_data=f"reject_{driver_id}")]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_confirm_delete_keyboard(telegram_id: int):
+    """Клавиатура подтверждения удаления водителя."""
+    buttons = [
+        [InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"confirm_delete_{telegram_id}")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_delete")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -165,4 +257,10 @@ def get_client_after_out_keyboard(order_id: int):
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 def get_phone_keyboard():
     buttons = [[KeyboardButton(text="📱 Отправить номер телефона", request_contact=True)]]
-    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True, one_time_keyboard=True)
+    return ReplyKeyboardMarkup(
+        keyboard=buttons,
+        resize_keyboard=True,
+        one_time_keyboard=True,
+        input_field_placeholder="Используйте кнопки меню 👇",
+        is_persistent=True,
+    )
