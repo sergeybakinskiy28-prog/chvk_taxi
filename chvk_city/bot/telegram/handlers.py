@@ -1592,6 +1592,7 @@ async def finalize_order(message: Message, state: FSMContext, comment: str | Non
         if response.status_code == 200:
             order = response.json()
             order_id = order['id']
+            await state.update_data(order_id=order_id)
             base_text = (
                 "✅ Заказ создан! Ищем водителя...\n\n"
                 f"{route_vertical}"
@@ -1639,8 +1640,8 @@ async def finalize_order(message: Message, state: FSMContext, comment: str | Non
                         logger.error(f"Не удалось отправить заказ водителю {driver_tg_id}: {e}")
             except Exception as e:
                 logger.error(f"Ошибка отправки в чат водителей ({settings.DRIVER_CHAT_ID}): {e}")
-            # Полная очистка состояния после создания заказа — один клик = один заказ
-            await state.clear()
+            # Снимаем состояние FSM, но оставляем order_id в data для мягкой отмены/обработки UI
+            await state.set_state(None)
         else:
             error_detail = response.text
             logger.error(f"Ошибка API (Order): {response.status_code} - {error_detail}")
@@ -1734,6 +1735,7 @@ async def accept_order_callback(callback: CallbackQuery, state: FSMContext):
                         f"🚗 Машина: {order['car_model']}\n"
                         f"🔢 Номер: {order['car_number']}"
                     )
+                    logger.info("Sending accept notification to passenger %s for order %s", client_chat_id, order_id)
                     sent_msg = await callback.bot.send_message(
                         client_chat_id,
                         text,
@@ -1828,10 +1830,12 @@ async def complete_order_callback(callback: CallbackQuery, state: FSMContext):
                     driver_name = ord_data.get("driver_name", "R S")
                     car_model = ord_data.get("car_model", "Гранта")
                     car_number = ord_data.get("car_number", "255")
+                    route_text = _format_route_from_values(ord_data.get("from_address"), ord_data.get("to_address"))
 
                     # Формируем финальный чек в том же формате, что и сообщение «Водитель найден»
                     receipt_text = (
                         "🏁 Поездка завершена. Спасибо, что вы с нами!\n\n"
+                        f"{route_text}\n\n"
                         f"🚖 Ваш заказ выполнил: {driver_name}\n"
                         f"🚗 Машина: {car_model}\n"
                         f"🔢 Номер: {car_number}\n\n"
@@ -1839,6 +1843,7 @@ async def complete_order_callback(callback: CallbackQuery, state: FSMContext):
                     )
 
                     # Отправляем "чистый чек" с инлайн-оценкой (звезды)
+                    logger.info("Sending complete notification to passenger %s for order %s", client_chat_id, order_id)
                     await callback.bot.send_message(
                         chat_id=client_chat_id,
                         text=receipt_text,
@@ -1914,8 +1919,10 @@ async def cancel_delete_driver_callback(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("cancel_"))
 async def cancel_order_callback(callback: CallbackQuery, state: FSMContext):
     # callback.data имеет вид "cancel_{order_id}" (не cancel_delete)
+    data = await state.get_data()
+    state_order_id = data.get("order_id")
     raw_order_id = callback.data.split("_")[-1]
-    if not raw_order_id.isdigit():
+    if state_order_id is None and not raw_order_id.isdigit():
         await callback.answer()
         await state.clear()
         try:
@@ -1928,7 +1935,7 @@ async def cancel_order_callback(callback: CallbackQuery, state: FSMContext):
         )
         return
 
-    order_id = int(raw_order_id)
+    order_id = int(state_order_id) if state_order_id is not None else int(raw_order_id)
     
     try:
         response = await get_http_client().post(
@@ -1937,6 +1944,7 @@ async def cancel_order_callback(callback: CallbackQuery, state: FSMContext):
         )
         
         if response.status_code == 200:
+            await state.clear()
             await callback.answer("Заказ отменен ❌")
             try:
                 await callback.message.edit_text(
@@ -1945,8 +1953,7 @@ async def cancel_order_callback(callback: CallbackQuery, state: FSMContext):
             except Exception:
                 pass
         else:
-            state_now = await state.get_state()
-            if state_now and state_now.startswith("OrderTaxi"):
+            if state_order_id is None:
                 await state.clear()
                 try:
                     await callback.message.edit_reply_markup(reply_markup=None)
@@ -2112,6 +2119,7 @@ async def at_place_callback(callback: CallbackQuery, state: FSMContext):
                         "🚕 Такси подъехало! Выходите к машине.\n\n"
                         f"{route_text}"
                     )
+                    logger.info("Sending at-place notification to passenger %s for order %s", client_chat_id, order_id)
                     sent = await callback.bot.send_message(
                         client_chat_id,
                         text,
@@ -2386,6 +2394,7 @@ async def start_trip_callback(callback: CallbackQuery, state: FSMContext):
                                 pass
                         await p_state.update_data(waiting_message_id=None)
 
+                    logger.info("Sending start-trip notification to passenger %s for order %s", client_chat_id, order_id)
                     sent = await callback.bot.send_message(
                         client_chat_id,
                         "🚀 Поехали! Приятного пути.",
