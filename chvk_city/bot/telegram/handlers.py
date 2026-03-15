@@ -170,32 +170,14 @@ def get_http_client() -> httpx.AsyncClient:
 async def _get_menu_for_user(telegram_id: int) -> ReplyKeyboardMarkup:
     """
     Возвращает главное меню в зависимости от статуса пользователя.
-    Проверка идёт по БД: сначала API, при неудаче — прямое чтение через SQLAlchemy.
+    Проверка идёт напрямую по БД через TaxiService.get_driver.
     - is_driver (одобрен) → меню с «Кабинет водителя»
     - has_pending_application → меню без «Стать водителем»
     - иначе → меню с «Стать водителем»
     """
     is_driver = False
     has_pending = False
-    source = "fallback"
-
-    try:
-        resp = await get_http_client().get(f"/taxi/driver/by_telegram/{telegram_id}")
-        if resp.status_code == 200:
-            data = resp.json()
-            is_approved = data.get("is_approved")
-            if is_approved in (True, "true", 1):
-                is_driver = True
-                source = "API(is_driver=True)"
-            else:
-                has_pending = True
-                source = "API(has_pending=True)"
-            print(f"DEBUG: Checking menu for {telegram_id}, is_driver={is_driver}, source={source}", flush=True)
-            return keyboards.get_main_menu(is_driver=is_driver, has_pending_application=has_pending, user_id=telegram_id)
-        else:
-            print(f"DEBUG: API driver check returned status_code={resp.status_code} for {telegram_id}", flush=True)
-            except Exception as e:
-        logger.error(f"API driver check failed for {telegram_id}: {e}", exc_info=True)
+    source = "DB(no driver)"
 
     try:
         async with async_session() as db:
@@ -204,17 +186,22 @@ async def _get_menu_for_user(telegram_id: int) -> ReplyKeyboardMarkup:
                 if driver.is_approved:
                     is_driver = True
                     source = "DB(is_driver=True)"
-        else:
+                else:
                     has_pending = True
                     source = "DB(has_pending=True)"
-            else:
-                source = "DB(no driver)"
-        print(f"DEBUG: Checking menu for {telegram_id}, is_driver={is_driver}, source={source}", flush=True)
-        return keyboards.get_main_menu(is_driver=is_driver, has_pending_application=has_pending, user_id=telegram_id)
     except Exception as e:
         logger.error(f"DB driver check failed for {telegram_id}: {e}", exc_info=True)
-    print(f"DEBUG: Checking menu for {telegram_id}, is_driver=False, source=fallback", flush=True)
-    return keyboards.get_main_menu(is_driver=False, has_pending_application=False, user_id=telegram_id)
+        source = "fallback"
+
+    print(
+        f"DEBUG: Checking menu for {telegram_id}, is_driver={is_driver}, source={source}",
+        flush=True,
+    )
+    return keyboards.get_main_menu(
+        is_driver=is_driver,
+        has_pending_application=has_pending,
+        user_id=telegram_id,
+    )
 
 
 def _normalize_phone_digits(phone: str) -> str:
