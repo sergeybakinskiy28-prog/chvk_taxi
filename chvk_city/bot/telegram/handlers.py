@@ -194,7 +194,7 @@ async def _get_menu_for_user(telegram_id: int) -> ReplyKeyboardMarkup:
             return keyboards.get_main_menu(is_driver=is_driver, has_pending_application=has_pending, user_id=telegram_id)
         else:
             print(f"DEBUG: API driver check returned status_code={resp.status_code} for {telegram_id}", flush=True)
-    except Exception as e:
+            except Exception as e:
         logger.error(f"API driver check failed for {telegram_id}: {e}", exc_info=True)
 
     try:
@@ -204,7 +204,7 @@ async def _get_menu_for_user(telegram_id: int) -> ReplyKeyboardMarkup:
                 if driver.is_approved:
                     is_driver = True
                     source = "DB(is_driver=True)"
-                else:
+        else:
                     has_pending = True
                     source = "DB(has_pending=True)"
             else:
@@ -339,7 +339,7 @@ async def my_orders_handler(message: Message):
     try:
         user_resp = await get_http_client().get(f"/taxi/user/{telegram_id}")
         if user_resp.status_code != 200:
-            await message.answer(
+    await message.answer(
                 "Вы еще не совершали поездок. Самое время заказать такси! 🚕",
                 reply_markup=await _get_menu_for_user(message.from_user.id),
             )
@@ -548,6 +548,7 @@ async def _finalize_driver_registration(message: Message, state: FSMContext, pho
     print(f"DEBUG: Saving driver {telegram_id}", flush=True)
 
     data = await state.get_data()
+    print(f"DEBUG DATA: {data}", flush=True)
     full_name = data.get("full_name") or ""
     car_info = data.get("car_info") or ""
 
@@ -564,69 +565,18 @@ async def _finalize_driver_registration(message: Message, state: FSMContext, pho
         car_number = car_info
         car_model = car_info
 
-    # Сохранение: сначала API, при неудаче — прямая запись в БД (всё в одном try для перехвата ошибок)
-    saved = False
+    # Прямая запись в БД через TaxiService
     try:
-        # Пытаемся через API
-        try:
-            await get_http_client().post("/taxi/user/register", json={"telegram_id": telegram_id, "name": full_name})
-            await get_http_client().post("/taxi/user/update_phone", json={"telegram_id": telegram_id, "phone": phone})
-            reg_resp = await get_http_client().post(
-                "/taxi/driver/register",
-                json={"telegram_id": telegram_id, "car_model": car_model, "car_number": car_number},
-            )
-            if reg_resp.status_code != 200:
-                raise Exception(f"API register вернул {reg_resp.status_code}: {reg_resp.text[:200]}")
-            reg_data = reg_resp.json()
-            driver_id = reg_data.get("driver_id")
-            approve_resp = await get_http_client().post(f"/taxi/driver/{driver_id}/approve")
-            if approve_resp.status_code != 200:
-                raise Exception(f"API approve вернул {approve_resp.status_code}")
-            async with async_session() as db:
-                check_driver = await TaxiService.get_driver(db, telegram_id)
-                if check_driver is None:
-                    raise Exception("API сохранил, но водитель не найден в БД!")
-            saved = True
-            print(f"DEBUG: Driver {telegram_id} saved via API", flush=True)
-        except Exception as api_err:
-            logger.error(f"Driver registration API failed, trying DB: {api_err}")
-
-        # Fallback: прямая запись в БД
-        if not saved:
-            logger.info(f"Driver registration: saving via DB tg_id={telegram_id}")
-            async with async_session() as db:
-                await TaxiService.get_or_create_user(db, telegram_id, name=full_name)
-                await TaxiService.update_user_phone(db, telegram_id, phone)
-                driver = await TaxiService.register_driver(db, telegram_id, car_model, car_number)
-                await TaxiService.approve_driver(db, driver.id)
-                await db.commit()
-                check_driver = await TaxiService.get_driver(db, telegram_id)
-                if check_driver is None:
-                    raise Exception(
-                        "Запись в БД инициирована, но не найдена!"
-                    )
-            saved = True
-            print(f"DEBUG: Driver {telegram_id} saved via DB", flush=True)
+        async with async_session() as db:
+            await TaxiService.update_user_phone(db, telegram_id, phone)
+            driver = await TaxiService.register_driver(db, telegram_id, car_model, car_number)
+            await TaxiService.approve_driver(db, driver.id)
     except Exception as e:
-        await message.answer(f"КРИТИЧЕСКАЯ ОШИБКА БАЗЫ: {e}")
-        logger.error(f"Driver registration critical error: {e}", exc_info=True)
-        await state.clear()
-        try:
-            menu = await _get_menu_for_user(telegram_id)
-        except Exception:
-            menu = keyboards.get_main_menu(is_driver=False, has_pending_application=False, user_id=telegram_id)
-        await message.answer("Выйдите из анкеты и попробуйте позже.", reply_markup=menu)
+        await message.answer(f"Ошибка сохранения: {e}")
+        logger.error(f"Driver registration save error: {e}", exc_info=True)
         return
 
-    if not saved:
-        await state.clear()
-        await message.answer(
-            "❌ Ошибка при сохранении данных. Попробуйте позже.",
-            reply_markup=await _get_menu_for_user(telegram_id),
-        )
-        return
-
-    # Важно: очищаем FSM ДО финального сообщения, иначе анкета «зависнет»
+    # Сбрасываем FSM только после успешного сохранения
     await state.clear()
 
     # Уведомление админу о новом водителе
@@ -1094,7 +1044,7 @@ async def back_to_menu_callback(callback: CallbackQuery, state: FSMContext):
 async def process_skip_comment(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     try:
-        await callback.message.delete()
+    await callback.message.delete()
     except Exception:
         pass
     await finalize_order(callback.message, state, comment=None)
@@ -1124,7 +1074,7 @@ async def finalize_order(message: Message, state: FSMContext, comment: str | Non
 
     from_address = data.get('from_address')
     to_address = data.get('to_address')
-
+    
     if not from_address or not to_address:
         await message.answer("❌ Ошибка: адрес отправления или назначения не указан.")
         await state.clear()
@@ -1163,7 +1113,7 @@ async def finalize_order(message: Message, state: FSMContext, comment: str | Non
             msg_list = data.get("msg_to_delete", [])
             msg_list.append(sent_msg.message_id)
             await state.update_data(msg_to_delete=msg_list)
-
+            
             # Отправка в чат водителей
             driver_msg = (
                 f"🚕 **Новый заказ #{order_id}**\n\n"
@@ -1199,7 +1149,7 @@ async def finalize_order(message: Message, state: FSMContext, comment: str | Non
             print(f"[API] Order 500/error: {response.status_code} - {error_detail}", flush=True)
             await message.answer(f"❌ Ошибка на стороне сервера (Status {response.status_code}). Попробуйте позже.")
             await state.clear()
-
+                
     except httpx.ConnectError as e:
         logger.error(f"Connection error to {settings.API_BASE_URL}: {e}")
         print(f"[API] ConnectionError: {e}", flush=True)
@@ -1238,7 +1188,7 @@ async def accept_order_callback(callback: CallbackQuery, state: FSMContext):
             # Краткое подтверждение в чате, где нажата кнопка (группа водителей)
             await callback.answer("Вы приняли заказ! ✅")
             try:
-                await callback.message.edit_text(
+            await callback.message.edit_text(
                     f"🚕 Заказ #{order_id} принят водителем {callback.from_user.full_name}.",
                     reply_markup=None,
                 )
@@ -1249,12 +1199,12 @@ async def accept_order_callback(callback: CallbackQuery, state: FSMContext):
             try:
                 card_text = (
                     f"🚕 **Вы приняли заказ #{order_id}**\n\n"
-                    f"👤 Клиент: {order.get('client_phone', 'не указан')}\n"
-                    f"📍 Откуда: {order['from_address']}\n"
+                f"👤 Клиент: {order.get('client_phone', 'не указан')}\n"
+                f"📍 Откуда: {order['from_address']}\n"
                     f"🏁 Куда: {order['to_address']}"
                     + (f"\n💬 Примечание: {order.get('comment')}" if order.get('comment') else "\n💬 Примечание: Нет")
-                )
-                await callback.bot.send_message(
+            )
+            await callback.bot.send_message(
                     chat_id=driver_telegram_id,
                     text=card_text,
                     reply_markup=keyboards.get_driver_accept_keyboard(
@@ -1280,9 +1230,9 @@ async def accept_order_callback(callback: CallbackQuery, state: FSMContext):
                 else:
                     text = (
                         "🚕 **Водитель найден!**\n\n"
-                        f"👤 Имя: {callback.from_user.full_name}\n"
-                        f"🚗 Машина: {order['car_model']}\n"
-                        f"🔢 Номер: {order['car_number']}\n\n"
+                f"👤 Имя: {callback.from_user.full_name}\n"
+                f"🚗 Машина: {order['car_model']}\n"
+                f"🔢 Номер: {order['car_number']}\n\n"
                         "🚕 Водитель скоро прибудет."
                     )
                     sent_msg = await callback.bot.send_message(
@@ -1477,9 +1427,9 @@ async def cancel_order_callback(callback: CallbackQuery):
         if response.status_code == 200:
             await callback.answer("Заказ отменен ❌")
             try:
-                await callback.message.edit_text(
-                    f"❌ Заказ #{order_id} был отменен вами."
-                )
+            await callback.message.edit_text(
+                f"❌ Заказ #{order_id} был отменен вами."
+            )
             except Exception:
                 pass
         else:
@@ -1502,7 +1452,7 @@ async def approve_driver_callback(callback: CallbackQuery):
                 "✅ Ваша заявка одобрена! Теперь вы можете принимать заказы."
             )
             try:
-                await callback.message.edit_text(callback.message.text + "\n\n✅ Одобрен")
+            await callback.message.edit_text(callback.message.text + "\n\n✅ Одобрен")
             except Exception:
                 pass
         else:
@@ -1526,7 +1476,7 @@ async def reject_driver_callback(callback: CallbackQuery):
                 "❌ Ваша заявка на регистрацию водителем отклонена."
             )
             try:
-                await callback.message.edit_text(callback.message.text + "\n\n❌ Отклонен")
+            await callback.message.edit_text(callback.message.text + "\n\n❌ Отклонен")
             except Exception:
                 pass
         else:
@@ -1605,7 +1555,7 @@ async def fire_driver_callback(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("ignore_"))
 async def ignore_order_callback(callback: CallbackQuery):
     try:
-        await callback.message.delete()
+    await callback.message.delete()
     except Exception:
         pass
     await callback.answer("Заказ скрыт")
