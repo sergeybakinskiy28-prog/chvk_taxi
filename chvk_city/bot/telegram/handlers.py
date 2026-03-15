@@ -176,12 +176,24 @@ async def _get_menu_for_user(telegram_id: int) -> ReplyKeyboardMarkup:
         resp = await get_http_client().get(f"/taxi/driver/by_telegram/{telegram_id}")
         if resp.status_code == 200:
             data = resp.json()
-            if data.get("is_approved"):
+            is_approved = data.get("is_approved")
+            if is_approved in (True, "true", 1):
                 return keyboards.get_main_menu(is_driver=True, has_pending_application=False, user_id=telegram_id)
             return keyboards.get_main_menu(is_driver=False, has_pending_application=True, user_id=telegram_id)
     except Exception:
         pass
     return keyboards.get_main_menu(is_driver=False, has_pending_application=False, user_id=telegram_id)
+
+
+def _normalize_phone_digits(phone: str) -> str:
+    """Извлекает только цифры из номера, игнорируя +, (, ), -, пробелы."""
+    return "".join(c for c in str(phone) if c.isdigit())
+
+
+def _is_valid_phone(phone: str) -> bool:
+    """Проверка: в номере от 10 до 12 цифр."""
+    digits = _normalize_phone_digits(phone)
+    return 10 <= len(digits) <= 12
 
 
 def _get_passenger_state(bot, storage, user_id):
@@ -489,10 +501,13 @@ async def driver_reg_phone_contact(message: Message, state: FSMContext):
 async def driver_reg_phone_text(message: Message, state: FSMContext):
     if message.text and message.text.strip():
         phone = message.text.strip()
-        if any(c.isdigit() for c in phone) and len(phone) >= 10:
+        if _is_valid_phone(phone):
             await _finalize_driver_registration(message, state, phone)
             return
-    await message.answer("Пожалуйста, введите корректный номер телефона (минимум 10 цифр).")
+    await message.answer(
+        "Пожалуйста, введите номер телефона (10–12 цифр). "
+        "Можно с +, скобками, дефисами и пробелами.",
+    )
 
 
 async def _finalize_driver_registration(message: Message, state: FSMContext, phone: str):
@@ -524,7 +539,7 @@ async def _finalize_driver_registration(message: Message, state: FSMContext, pho
             "/taxi/user/update_phone",
             json={"telegram_id": telegram_id, "phone": phone},
         )
-        await get_http_client().post(
+        reg_resp = await get_http_client().post(
             "/taxi/driver/register",
             json={
                 "telegram_id": telegram_id,
@@ -532,6 +547,12 @@ async def _finalize_driver_registration(message: Message, state: FSMContext, pho
                 "car_number": car_number,
             },
         )
+        if reg_resp.status_code != 200:
+            raise Exception(f"register returned {reg_resp.status_code}")
+        reg_data = reg_resp.json()
+        driver_id = reg_data.get("driver_id")
+        if driver_id is not None:
+            await get_http_client().post(f"/taxi/driver/{driver_id}/approve")
     except Exception as e:
         logger.error(f"Driver registration API error: {e}")
         await state.clear()
@@ -541,9 +562,9 @@ async def _finalize_driver_registration(message: Message, state: FSMContext, pho
         )
         return
 
-    # Отправка заявки админу
+    # Уведомление админу о новом водителе
     admin_text = (
-        f"📋 Новая заявка на водителя\n\n"
+        f"📋 Новая заявка на водителя (одобрена)\n\n"
         f"👤 ФИО: {full_name}\n"
         f"🚗 Авто: {car_info}\n"
         f"📱 Телефон: {phone}\n"
@@ -555,12 +576,12 @@ async def _finalize_driver_registration(message: Message, state: FSMContext, pho
             text=admin_text,
         )
     except Exception as e:
-        logger.error(f"Failed to send driver application to admin: {e}")
+        logger.error(f"Failed to send driver notification to admin: {e}")
 
     await state.clear()
     await message.answer(
-        "✅ Ваша заявка на рассмотрении.\n"
-        "После одобрения администратором здесь появится кабинет водителя.",
+        "✅ Вы успешно зарегистрированы как водитель!\n"
+        "Теперь вы можете выйти на смену через кабинет водителя.",
         reply_markup=await _get_menu_for_user(telegram_id),
     )
 
