@@ -574,6 +574,7 @@ async def taxi_order_start(message: Message, state: FSMContext):
     await state.update_data(
         msg_to_delete=msg_list,
         order_started_by_button=True,
+        requester_telegram_id=message.from_user.id,
         destination_addresses=[],
         from_address=None,
         to_address=None,
@@ -1522,7 +1523,7 @@ async def confirm_order_creation_callback(callback: CallbackQuery, state: FSMCon
         await callback.message.edit_reply_markup(reply_markup=None)
     except Exception:
         pass
-    await finalize_order(callback.message, state)
+    await finalize_order(callback.message, state, requester_telegram_id=callback.from_user.id)
 
 
 @router.callback_query(F.data == "cancel_order_creation", OrderTaxi.waiting_for_confirmation)
@@ -1539,7 +1540,12 @@ async def cancel_order_creation_callback(callback: CallbackQuery, state: FSMCont
     )
 
 
-async def finalize_order(message: Message, state: FSMContext, comment: str | None = None):
+async def finalize_order(
+    message: Message,
+    state: FSMContext,
+    comment: str | None = None,
+    requester_telegram_id: int | None = None,
+):
     # Работаем только после явного подтверждения заказа
     current_state = await state.get_state() or ""
     if current_state != OrderTaxi.waiting_for_confirmation.state:
@@ -1574,6 +1580,7 @@ async def finalize_order(message: Message, state: FSMContext, comment: str | Non
     final_comment = _build_order_comment_payload(data, explicit_comment=comment)
     calculated_price = data.get("calculated_price")
     route_vertical = _format_route_vertical(from_address, destination_addresses)
+    passenger_telegram_id = requester_telegram_id or data.get("requester_telegram_id") or message.chat.id
 
     await state.update_data(is_processing=True)
 
@@ -1581,7 +1588,7 @@ async def finalize_order(message: Message, state: FSMContext, comment: str | Non
         response = await get_http_client().post(
             "/taxi/order",
             json={
-                "telegram_id": message.from_user.id,
+                "telegram_id": passenger_telegram_id,
                 "from_address": from_address,
                 "to_address": route_display,
                 "comment": final_comment,
@@ -1735,6 +1742,9 @@ async def accept_order_callback(callback: CallbackQuery, state: FSMContext):
                         f"🚗 Машина: {order['car_model']}\n"
                         f"🔢 Номер: {order['car_number']}"
                     )
+                    if client_chat_id == me.id:
+                        logger.warning("Ошибка: попытка отправить сообщение боту")
+                        return
                     logger.info("Sending accept notification to passenger %s for order %s", client_chat_id, order_id)
                     sent_msg = await callback.bot.send_message(
                         client_chat_id,
@@ -1809,6 +1819,10 @@ async def complete_order_callback(callback: CallbackQuery, state: FSMContext):
             # "Чистый чек": Удаляем все временные сообщения пассажиру ПЕРЕД отправкой чека
             if client_chat_id is not None:
                 try:
+                    me = await callback.bot.get_me()
+                    if client_chat_id == me.id:
+                        logger.warning("Ошибка: попытка отправить сообщение боту")
+                        return
                     p_state = _get_passenger_state(callback.bot, state.storage, client_chat_id)
                     p_data = await p_state.get_data()
                     msg_to_delete = p_data.get("msg_to_delete") or []
@@ -2119,6 +2133,9 @@ async def at_place_callback(callback: CallbackQuery, state: FSMContext):
                         "🚕 Такси подъехало! Выходите к машине.\n\n"
                         f"{route_text}"
                     )
+                    if client_chat_id == me.id:
+                        logger.warning("Ошибка: попытка отправить сообщение боту")
+                        return
                     logger.info("Sending at-place notification to passenger %s for order %s", client_chat_id, order_id)
                     sent = await callback.bot.send_message(
                         client_chat_id,
@@ -2374,6 +2391,10 @@ async def start_trip_callback(callback: CallbackQuery, state: FSMContext):
             # Уведомляем клиента: удаляем сообщение «Водитель на месте» (или убираем кнопки), затем отправляем новое
             if client_chat_id is not None:
                 try:
+                    me = await callback.bot.get_me()
+                    if client_chat_id == me.id:
+                        logger.warning("Ошибка: попытка отправить сообщение боту")
+                        return
                     p_state = _get_passenger_state(callback.bot, state.storage, client_chat_id)
                     p_data = await p_state.get_data()
                     waiting_message_id = p_data.get("waiting_message_id")
@@ -2444,6 +2465,7 @@ async def start_new_order_callback(callback: CallbackQuery, state: FSMContext):
     # Шаг 2: помечаем новый заказ и показываем recent/manual адреса отправления
     await state.update_data(
         order_started_by_button=True,
+        requester_telegram_id=callback.from_user.id,
         is_processing=False,
         msg_to_delete=[],
         destination_addresses=[],
