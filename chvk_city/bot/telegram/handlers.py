@@ -235,33 +235,21 @@ def _get_passenger_state(bot, storage, user_id):
 
 async def _get_recent_addresses(telegram_id: int, address_type: str) -> list[str]:
     """
-    Возвращает до 5 уникальных недавних адресов пользователя:
+    Возвращает до 3 уникальных недавних адресов пользователя:
     - address_type == "from" -> адреса отправления
     - address_type == "to" -> адреса назначения
     """
     try:
         async with async_session() as db:
-            orders = await TaxiService.get_recent_completed_orders(db, telegram_id, limit=10)
+            return await TaxiService.get_recent_unique_addresses(
+                db,
+                telegram_id,
+                address_type=address_type,
+                limit=3,
+            )
     except Exception as e:
         logger.error(f"Failed to load recent addresses for {telegram_id}: {e}", exc_info=True)
         return []
-
-    raw_addresses: list[str] = []
-    for order in orders:
-        value = order.from_address if address_type == "from" else order.to_address
-        value = (value or "").strip()
-        if value:
-            raw_addresses.append(value)
-
-    unique_addresses: list[str] = []
-    seen: set[str] = set()
-    for address in raw_addresses:
-        if address not in seen:
-            seen.add(address)
-            unique_addresses.append(address)
-        if len(unique_addresses) >= 5:
-            break
-    return unique_addresses
 
 
 def _short_address_label(address: str) -> str:
@@ -275,7 +263,7 @@ def _build_recent_addresses_keyboard(addresses: list[str], step: str):
     builder = InlineKeyboardBuilder()
     prefix = "recent_from" if step == "from" else "recent_to"
     manual_callback = "manual_from" if step == "from" else "manual_to"
-    icon = "🏠" if step == "from" else "🏢"
+    icon = "🏠" if step == "from" else "📍"
 
     for idx, address in enumerate(addresses):
         builder.button(
@@ -298,7 +286,7 @@ async def _prompt_for_from_address(target_message: Message, state: FSMContext, t
 
     if recent_addresses:
         sent = await target_message.answer(
-            "Выберите недавний адрес отправления или введите новый вручную:",
+            "🗺️ Откуда вас забрать?\nВыберите из недавних или введите новый:",
             reply_markup=_build_recent_addresses_keyboard(recent_addresses, "from"),
         )
         msg_list.append(sent.message_id)
@@ -308,7 +296,7 @@ async def _prompt_for_from_address(target_message: Message, state: FSMContext, t
         )
     else:
         sent = await target_message.answer(
-            "Напишите адрес улицы и номер дома (откуда забрать):",
+            "🗺️ Откуда вас забрать?\nВведите адрес вручную:",
             reply_markup=ReplyKeyboardRemove(),
         )
         msg_list.append(sent.message_id)
@@ -327,7 +315,7 @@ async def _prompt_for_to_address(target_message: Message, state: FSMContext, tel
 
     if recent_addresses:
         sent = await target_message.answer(
-            "Выберите недавний адрес назначения или введите новый вручную:",
+            "🏁 Куда едем?\nВыберите из недавних или введите новый:",
             reply_markup=_build_recent_addresses_keyboard(recent_addresses, "to"),
         )
         msg_list.append(sent.message_id)
@@ -337,7 +325,7 @@ async def _prompt_for_to_address(target_message: Message, state: FSMContext, tel
         )
     else:
         sent = await target_message.answer(
-            "✅ Адрес отправления сохранен.\n\nНапишите адрес улицы и номер дома (куда едем):",
+            "🏁 Куда едем?\nВведите адрес вручную:",
             reply_markup=ReplyKeyboardRemove(),
         )
         msg_list.append(sent.message_id)

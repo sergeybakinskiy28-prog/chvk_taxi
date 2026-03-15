@@ -1,5 +1,5 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import func, select
 from chvk_city.backend.models.order import Order
 from chvk_city.backend.models.user import User
 from chvk_city.backend.models.driver import Driver
@@ -108,6 +108,38 @@ class TaxiService:
             .limit(limit)
         )
         return list(result.scalars().all())
+
+    @staticmethod
+    async def get_recent_unique_addresses(
+        db: AsyncSession,
+        telegram_id: int,
+        address_type: str,
+        limit: int = 3,
+    ) -> List[str]:
+        user_result = await db.execute(select(User).where(User.telegram_id == telegram_id))
+        user = user_result.scalar_one_or_none()
+        if not user:
+            return []
+
+        address_column = Order.from_address if address_type == "from" else Order.to_address
+
+        result = await db.execute(
+            select(
+                address_column.label("address"),
+                func.max(Order.created_at).label("last_used"),
+            )
+            .where(
+                Order.user_id == user.id,
+                Order.status == "completed",
+                address_column.is_not(None),
+                address_column != "",
+            )
+            .group_by(address_column)
+            .order_by(func.max(Order.created_at).desc())
+            .limit(limit)
+        )
+
+        return [row.address for row in result.all() if row.address]
     @staticmethod
     async def get_driver(db: AsyncSession, telegram_id: int) -> Driver | None:
         result = await db.execute(
