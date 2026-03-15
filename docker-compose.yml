@@ -44,6 +44,7 @@ services:
     command: python -m chvk_city.bot.telegram.bot
     environment:
       API_BASE_URL: http://api:8000
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-chvk}:${POSTGRES_PASSWORD:-chvk_secret}@db:5432/${POSTGRES_DB:-taxi}
     env_file:
       - .env
     depends_on:

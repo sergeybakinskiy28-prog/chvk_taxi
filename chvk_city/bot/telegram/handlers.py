@@ -189,7 +189,7 @@ async def _get_menu_for_user(telegram_id: int) -> ReplyKeyboardMarkup:
                 has_pending = True
             return keyboards.get_main_menu(is_driver=is_driver, has_pending_application=has_pending, user_id=telegram_id)
     except Exception as e:
-        logger.debug(f"API driver check failed for {telegram_id}: {e}")
+        logger.error(f"API driver check failed for {telegram_id}: {e}", exc_info=True)
 
     try:
         async with async_session() as db:
@@ -201,7 +201,7 @@ async def _get_menu_for_user(telegram_id: int) -> ReplyKeyboardMarkup:
                     has_pending = True
         return keyboards.get_main_menu(is_driver=is_driver, has_pending_application=has_pending, user_id=telegram_id)
     except Exception as e:
-        logger.debug(f"DB driver check failed for {telegram_id}: {e}")
+        logger.error(f"DB driver check failed for {telegram_id}: {e}", exc_info=True)
     return keyboards.get_main_menu(is_driver=False, has_pending_application=False, user_id=telegram_id)
 
 
@@ -459,8 +459,8 @@ async def become_driver_handler(message: Message, state: FSMContext):
                 reply_markup=await _get_menu_for_user(telegram_id),
                 )
             return
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error(f"become_driver_handler API check failed for {telegram_id}: {e}", exc_info=True)
     await _start_driver_registration(message, state)
 
 
@@ -552,21 +552,30 @@ async def _finalize_driver_registration(message: Message, state: FSMContext, pho
 
     # Сохранение в БД: используем SQLAlchemy напрямую, чтобы гарантировать запись
     saved = False
+    driver_id = None
     try:
+        logger.info(f"Driver registration: saving tg_id={telegram_id}, name={full_name}, car={car_model}/{car_number}")
         async with async_session() as db:
             user = await TaxiService.get_or_create_user(db, telegram_id, name=full_name)
             await TaxiService.update_user_phone(db, telegram_id, phone)
             driver = await TaxiService.register_driver(db, telegram_id, car_model, car_number)
+            driver_id = driver.id
             await TaxiService.approve_driver(db, driver.id)
         saved = True
+        logger.info(f"Driver registration: saved successfully for tg_id={telegram_id}, driver_id={driver_id}")
     except Exception as e:
-        logger.exception(f"Driver registration DB error: {e}")
+        logger.error(f"Driver registration DB error: {e}", exc_info=True)
 
     if not saved:
         await state.clear()
+        try:
+            menu = await _get_menu_for_user(telegram_id)
+        except Exception as menu_err:
+            logger.error(f"Failed to get menu after registration error: {menu_err}", exc_info=True)
+            menu = keyboards.get_main_menu(is_driver=False, has_pending_application=False, user_id=telegram_id)
         await message.answer(
-            "❌ Ошибка при сохранении заявки. Попробуйте позже или обратитесь в поддержку.",
-            reply_markup=await _get_menu_for_user(telegram_id),
+            "❌ Ошибка при сохранении данных. Попробуйте позже.",
+            reply_markup=menu,
         )
         return
 

@@ -26,6 +26,16 @@ async def main():
     init_http_client()
     print(f"Backend: {settings.API_BASE_URL}", flush=True)
 
+    from chvk_city.backend.database.db import async_session
+    from chvk_city.backend.services.taxi_service import TaxiService
+    try:
+        async with async_session() as db:
+            _ = await TaxiService.get_driver(db, 0)
+        print("DB: async_session OK", flush=True)
+    except Exception as e:
+        logger.error(f"DB async_session init check failed: {e}", exc_info=True)
+        print(f"[WARN] DB check failed (driver registration may not work): {e}", flush=True)
+
     dp.include_router(router)
 
     try:
