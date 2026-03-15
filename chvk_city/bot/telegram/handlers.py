@@ -57,23 +57,29 @@ async def process_from_address(message: Message, state: FSMContext):
     }:
         await message.answer("Сейчас я жду адрес, пожалуйста, напишите его текстом.")
         return
+    from_address = (message.text or "").strip()
+    if len(from_address) < 3:
+        await message.answer("Пожалуйста, напишите адрес отправления текстом.")
+        return
     data = await state.get_data()
     msg_list = data.get("msg_to_delete", [])
     msg_list.append(message.message_id)
-    await state.update_data(msg_to_delete=msg_list)
+    await state.update_data(
+        msg_to_delete=msg_list,
+        from_address=from_address,
+    )
+    await state.set_state(OrderTaxi.waiting_for_to_address)
+    print(f"DEBUG ORDER: saved from_address='{from_address}' for user {message.from_user.id}", flush=True)
 
-    await state.update_data(from_address=message.text)
     # На шаге ввода адресов не показываем главное меню — только поле ввода
     sent = await message.answer(
-        "Напишите адрес улицы и номер дома (куда едем):",
+        "✅ Адрес отправления сохранен.\n\nНапишите адрес улицы и номер дома (куда едем):",
         reply_markup=ReplyKeyboardRemove(),
     )
     data = await state.get_data()
     msg_list = data.get("msg_to_delete", [])
     msg_list.append(sent.message_id)
     await state.update_data(msg_to_delete=msg_list)
-
-    await state.set_state(OrderTaxi.waiting_for_to_address)
 
 
 @router.message(OrderTaxi.waiting_for_to_address, F.text)
@@ -1943,6 +1949,7 @@ async def start_new_order_callback(callback: CallbackQuery, state: FSMContext):
     Сбрасываем состояние и переводим к вводу адреса 'откуда',
     не удаляя сообщение с оценкой из истории.
     """
+    await callback.answer()
     # Сбрасываем предыдущее состояние
     await state.clear()
 
@@ -1956,7 +1963,8 @@ async def start_new_order_callback(callback: CallbackQuery, state: FSMContext):
     try:
         prompt = await callback.message.answer(
             "Отлично! Начинаем новый заказ. 🚕\n\n"
-            "Напишите адрес, откуда вас забрать: 📍",
+            "Напишите адрес улицы и номер дома (откуда забрать):",
+            reply_markup=ReplyKeyboardRemove(),
         )
     except Exception as e:
         logger.exception(f"Error sending new order prompt: {e}")
@@ -1968,6 +1976,7 @@ async def start_new_order_callback(callback: CallbackQuery, state: FSMContext):
     # Помечаем, что заказ запущен из управляемой точки (кнопка), и начинаем новый список сообщений на удаление
     await state.update_data(
         order_started_by_button=True,
+        is_processing=False,
         msg_to_delete=[prompt.message_id],
         from_address=None,
         to_address=None,
