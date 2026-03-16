@@ -177,14 +177,11 @@ def get_client_after_accept_keyboard(order_id: int, driver_telegram_id: int | No
 
 def get_client_in_progress_keyboard(order_id: int, driver_telegram_id: int | None = None):
     """
-    Верхний блок в статусе «В пути»: 💬 Поддержка (сверху) + 💬 Написать водителю.
+    Верхний блок в статусе «В пути»: «Написать водителю» заменяется на 💬 Поддержка.
     """
-    buttons: list[list] = [
+    return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💬 Поддержка", url=_support_url())],
-    ]
-    if driver_telegram_id is not None:
-        buttons.append([InlineKeyboardButton(text="💬 Написать водителю", url=f"tg://user?id={driver_telegram_id}")])
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+    ])
 
 
 def get_at_place_driver_keyboard(order_id: int, client_telegram_id: int | None = None):
@@ -356,14 +353,11 @@ def get_new_order_after_rating_keyboard():
 def get_client_at_place_keyboard(order_id: int, driver_telegram_id: int | None = None):
     """
     Клавиатура для клиента, когда водитель на месте.
-    Только: 🏃 Выхожу! и 💬 Написать водителю (без Позвонить и Поддержка).
+    Только 🏃 Выхожу! — связь через верхнее сообщение (Написать водителю).
     """
-    buttons: list[list[InlineKeyboardButton]] = [
+    return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🏃 Выхожу!", callback_data=f"client_out_{order_id}")],
-    ]
-    if driver_telegram_id is not None:
-        buttons.append([InlineKeyboardButton(text="💬 Написать водителю", url=f"tg://user?id={driver_telegram_id}")])
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+    ])
 
 
 def get_client_after_out_keyboard(order_id: int):

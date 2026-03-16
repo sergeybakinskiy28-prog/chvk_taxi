@@ -666,11 +666,11 @@ async def process_contact(message: Message, state: FSMContext):
 
 def _get_technical_messages_kill_list(data: dict) -> list[int]:
     """
-    Kill list: только технический мусор для удаления.
-    НЕ включает карточки поездок («Итог заказа», «Заказ создан», «Водитель принял», «Поездка завершена»).
+    Kill list: временные уведомления и приветствия для удаления при новом заказе.
+    НЕ включает карточки поездок (основная карточка, финальные плашки).
     """
     ids: list[int] = []
-    for key in ("last_menu_msg_id", "last_new_order_prompt_id"):
+    for key in ("last_menu_msg_id", "last_new_order_prompt_id", "notification_id"):
         mid = data.get(key)
         if isinstance(mid, int) and mid not in ids:
             ids.append(mid)
