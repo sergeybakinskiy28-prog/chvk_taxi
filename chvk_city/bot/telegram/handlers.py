@@ -634,11 +634,11 @@ async def cmd_start(message: Message, state: FSMContext):
         "\u200b",
         reply_markup=await _get_menu_for_user(message.from_user.id),
     )
-    messages_to_delete = [welcome.message_id, menu_msg.message_id]
+    await add_to_cleanup(state, welcome.message_id)
+    await add_to_cleanup(state, menu_msg.message_id)
     await state.update_data(
         last_menu_msg_id=welcome.message_id,
         start_message_ids=[welcome.message_id, menu_msg.message_id],
-        messages_to_delete=messages_to_delete,
     )
 
 @router.message(F.contact)
@@ -665,6 +665,29 @@ async def process_contact(message: Message, state: FSMContext):
         f"✅ Номер {phone} подтвержден! Теперь вы можете заказать такси.",
         reply_markup=await _get_menu_for_user(message.from_user.id)
     )
+
+async def add_to_cleanup(state: FSMContext, message_id: int):
+    """Добавляет ID сервисного сообщения в список msg_to_cleanup."""
+    if not isinstance(message_id, int):
+        return
+    data = await state.get_data()
+    lst = list(data.get("msg_to_cleanup") or [])
+    if message_id not in lst:
+        lst.append(message_id)
+    await state.update_data(msg_to_cleanup=lst)
+
+
+async def perform_cleanup(bot, chat_id: int, state: FSMContext):
+    """Удаляет все сообщения из msg_to_cleanup и очищает список."""
+    data = await state.get_data()
+    ids = list(data.get("msg_to_cleanup") or [])
+    for mid in ids:
+        try:
+            await bot.delete_message(chat_id=chat_id, message_id=mid)
+        except Exception:
+            pass
+    await state.update_data(msg_to_cleanup=[])
+
 
 def _get_technical_messages_kill_list(data: dict) -> list[int]:
     """
@@ -700,13 +723,12 @@ async def _delete_or_clear_buttons_safe(bot, chat_id: int, message_id: int):
 @router.message(F.text == "🚖 Заказать такси")
 @router.message(F.text == "🚕 Заказать такси")
 async def taxi_order_start(message: Message, state: FSMContext):
-    # Kill list: приветствие, «Заказать такси» после поездки, «Дополнительные функции»
     data = await state.get_data()
-    messages_to_delete = data.get("messages_to_delete", [])
+    msg_to_cleanup = data.get("msg_to_cleanup", [])
     for mid in _get_technical_messages_kill_list(data):
         await _delete_or_clear_buttons_safe(message.bot, message.chat.id, mid)
     await state.clear()
-    await state.update_data(messages_to_delete=messages_to_delete)
+    await state.update_data(msg_to_cleanup=msg_to_cleanup)
 
     await _begin_order_flow(
         message,
@@ -721,7 +743,7 @@ async def start_order_inline_callback(callback: CallbackQuery, state: FSMContext
     await callback.answer()
     chat_id = callback.message.chat.id
     data = await state.get_data()
-    messages_to_delete = data.get("messages_to_delete", [])
+    msg_to_cleanup = data.get("msg_to_cleanup", [])
     for mid in _get_technical_messages_kill_list(data):
         await _delete_or_clear_buttons_safe(callback.bot, chat_id, mid)
     try:
@@ -729,7 +751,7 @@ async def start_order_inline_callback(callback: CallbackQuery, state: FSMContext
     except Exception:
         pass
     await state.clear()
-    await state.update_data(messages_to_delete=messages_to_delete)
+    await state.update_data(msg_to_cleanup=msg_to_cleanup)
     await _begin_order_flow(
         callback.message,
         state,
@@ -1689,20 +1711,18 @@ async def calculate_order_price_callback(callback: CallbackQuery, state: FSMCont
             reply_markup=keyboards.get_order_confirmation_keyboard(),
         )
         summary_message_id = sent.message_id
-    msg_to_del = data.get("messages_to_delete", [])
-    if summary_message_id not in msg_to_del:
-        msg_to_del.append(summary_message_id)
-    await state.update_data(msg_to_delete=[summary_message_id], messages_to_delete=msg_to_del)
+    await add_to_cleanup(state, summary_message_id)
+    await state.update_data(
+        msg_to_delete=[summary_message_id],
+        last_summary_message_id=summary_message_id,
+    )
     await state.set_state(OrderTaxi.waiting_for_confirmation)
 
 
 @router.callback_query(F.data == "confirm_order_creation", OrderTaxi.waiting_for_confirmation)
 async def confirm_order_creation_callback(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
-    try:
-        await callback.message.delete()
-    except Exception:
-        pass
+    await perform_cleanup(callback.bot, callback.message.chat.id, state)
     await finalize_order(callback.message, state, requester_telegram_id=callback.from_user.id)
 
 
@@ -1710,30 +1730,12 @@ async def confirm_order_creation_callback(callback: CallbackQuery, state: FSMCon
 @router.callback_query(F.data == "cancel_order_creation", OrderTaxi.waiting_for_confirmation)
 async def cancel_order_creation_callback(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
-    data = await state.get_data()
-    prev_cancel_id = data.get("last_cancel_msg_id")
+    await perform_cleanup(callback.bot, callback.message.chat.id, state)
     await state.clear()
-    # Удаляем сообщение с итогом/опциями
-    try:
-        await callback.message.delete()
-    except Exception:
-        try:
-            await callback.message.edit_reply_markup(reply_markup=None)
-        except Exception:
-            pass
-    if prev_cancel_id:
-        try:
-            await callback.bot.delete_message(
-                chat_id=callback.message.chat.id,
-                message_id=prev_cancel_id,
-            )
-        except Exception:
-            pass
-    sent = await callback.message.answer(
+    await callback.message.answer(
         "Заказ отменен. Вы можете начать новый заказ в любое время.",
         reply_markup=keyboards.get_start_order_inline_keyboard(),
     )
-    await state.update_data(last_cancel_msg_id=sent.message_id)
 
 
 async def finalize_order(
@@ -1810,11 +1812,10 @@ async def finalize_order(
                 reply_markup=keyboards.get_order_manage_keyboard(order_id)
             )
 
+            await add_to_cleanup(state, sent_msg.message_id)
             data = await state.get_data()
-            msg_list = data.get("msg_to_delete", [])
-            msg_list.append(sent_msg.message_id)
             await state.update_data(
-                msg_to_delete=msg_list,
+                msg_to_delete=[sent_msg.message_id],
                 active_message_id=sent_msg.message_id,
                 main_card_id=sent_msg.message_id,
             )
@@ -1970,6 +1971,7 @@ async def eta_select_callback(callback: CallbackQuery, state: FSMContext):
                     logger.info("Sending accept notification to passenger %s for order %s", client_chat_id, order_id)
                     driver_tg_id = callback.from_user.id
                     p_state = _get_passenger_state(callback.bot, state.storage, client_chat_id)
+                    await perform_cleanup(callback.bot, client_chat_id, p_state)
                     pdata = await p_state.get_data()
                     main_card_id = pdata.get("main_card_id") or pdata.get("active_message_id")
                     edited = False
@@ -2091,17 +2093,12 @@ async def complete_order_callback(callback: CallbackQuery, state: FSMContext):
 
                     main_card_id = p_data.get("main_card_id") or p_data.get("active_message_id")
                     notification_id = p_data.get("notification_id")
-                    messages_to_delete = list(p_data.get("messages_to_delete") or [])
-                    if isinstance(notification_id, int) and notification_id not in messages_to_delete:
-                        messages_to_delete.append(notification_id)
+                    if isinstance(notification_id, int):
+                        await add_to_cleanup(p_state, notification_id)
                     mid = p_data.get("last_new_order_prompt_id")
-                    if isinstance(mid, int) and mid not in messages_to_delete:
-                        messages_to_delete.append(mid)
-                    for msg_id in messages_to_delete:
-                        try:
-                            await callback.bot.delete_message(chat_id=client_chat_id, message_id=msg_id)
-                        except Exception:
-                            pass
+                    if isinstance(mid, int):
+                        await add_to_cleanup(p_state, mid)
+                    await perform_cleanup(callback.bot, client_chat_id, p_state)
                     edited = False
                     if isinstance(main_card_id, int):
                         try:
@@ -2196,6 +2193,7 @@ async def cancel_order_callback(callback: CallbackQuery, state: FSMContext):
     raw_order_id = callback.data.split("_")[-1]
     if state_order_id is None and not raw_order_id.isdigit():
         await callback.answer()
+        await perform_cleanup(callback.bot, callback.message.chat.id, state)
         await state.clear()
         try:
             await callback.message.edit_reply_markup(reply_markup=None)
@@ -2216,6 +2214,7 @@ async def cancel_order_callback(callback: CallbackQuery, state: FSMContext):
         )
         
         if response.status_code == 200:
+            await perform_cleanup(callback.bot, callback.message.chat.id, state)
             await state.clear()
             await callback.answer("Заказ отменен ❌")
             try:
@@ -2227,6 +2226,7 @@ async def cancel_order_callback(callback: CallbackQuery, state: FSMContext):
                 pass
         else:
             if state_order_id is None:
+                await perform_cleanup(callback.bot, callback.message.chat.id, state)
                 await state.clear()
                 try:
                     await callback.message.edit_reply_markup(reply_markup=None)
