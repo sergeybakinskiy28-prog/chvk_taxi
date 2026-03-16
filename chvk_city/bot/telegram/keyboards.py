@@ -166,17 +166,13 @@ def get_post_accept_driver_keyboard(order_id: int):
 
 def get_client_after_accept_keyboard(order_id: int, driver_telegram_id: int | None = None):
     """
-    Главный «пульт управления» заказом: Написать водителю, Позвонить, Поддержка.
+    Главный блок заказа: только кнопка «Написать водителю» (ссылка на личный чат).
     """
-    buttons: list[list[InlineKeyboardButton]] = [
-        [InlineKeyboardButton(text="📞 Позвонить", callback_data=f"client_call_{order_id}")],
-        [InlineKeyboardButton(text="💬 Поддержка", url=_support_url())],
-    ]
-    if driver_telegram_id is not None:
-        buttons.insert(0, [
-            InlineKeyboardButton(text="💬 Написать", url=f"tg://user?id={driver_telegram_id}")
-        ])
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+    if driver_telegram_id is None:
+        return InlineKeyboardMarkup(inline_keyboard=[])
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💬 Написать водителю", url=f"tg://user?id={driver_telegram_id}")]
+    ])
 
 
 def get_at_place_driver_keyboard(order_id: int, client_telegram_id: int | None = None):

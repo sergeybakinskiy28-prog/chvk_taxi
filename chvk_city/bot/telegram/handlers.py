@@ -686,11 +686,20 @@ def _get_messages_to_clean(data: dict) -> list[int]:
 @router.message(F.text == "🚖 Заказать такси")
 @router.message(F.text == "🚕 Заказать такси")
 async def taxi_order_start(message: Message, state: FSMContext):
-    # ОБЯЗАТЕЛЬНО: удаляем предыдущие сообщения через bot.delete_message
-    # (приветствие, чек, кнопки заказа). Если сообщение старше 48 ч — очищаем кнопки.
+    # Удаляем ТОЛЬКО приветствие, чтобы не мешалось между блоками заказов. Чеки сохраняем.
     data = await state.get_data()
-    for mid in _get_messages_to_clean(data):
-        await _delete_or_clear_buttons(message.bot, message.chat.id, mid)
+    last_menu_id = data.get("last_menu_msg_id")
+    if isinstance(last_menu_id, int):
+        try:
+            await message.bot.delete_message(chat_id=message.chat.id, message_id=last_menu_id)
+        except Exception:
+            pass
+    # Удаление остальных сообщений отключено — чат как лента поездок.
+    # for mid in _get_messages_to_clean(data):
+    #     try:
+    #         await message.bot.delete_message(chat_id=message.chat.id, message_id=mid)
+    #     except Exception:
+    #         await _remove_inline_keyboard(message.bot, message.chat.id, mid)
     await state.clear()
 
     await _begin_order_flow(
@@ -706,15 +715,19 @@ async def start_order_inline_callback(callback: CallbackQuery, state: FSMContext
     await callback.answer()
     chat_id = callback.message.chat.id
     data = await state.get_data()
-    for mid in _get_messages_to_clean(data):
-        await _delete_or_clear_buttons(callback.bot, chat_id, mid)
-    try:
-        await callback.message.delete()
-    except Exception:
+    # Удаляем ТОЛЬКО приветствие (если это оно)
+    last_menu_id = data.get("last_menu_msg_id")
+    if isinstance(last_menu_id, int):
         try:
-            await callback.message.edit_reply_markup(reply_markup=None)
+            await callback.bot.delete_message(chat_id=chat_id, message_id=last_menu_id)
         except Exception:
             pass
+    # Убираем кнопку у сообщения, с которого нажали
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    # Удаление остальных сообщений отключено — чат как лента поездок.
     await state.clear()
     await _begin_order_flow(
         callback.message,
@@ -2027,9 +2040,12 @@ async def complete_order_callback(callback: CallbackQuery, state: FSMContext):
                         return
                     p_state = _get_passenger_state(callback.bot, state.storage, client_chat_id)
                     p_data = await p_state.get_data()
-                    # Удаляем предыдущие сообщения пассажира; при невозможности — очищаем кнопки
-                    for mid in _get_messages_to_clean(p_data):
-                        await _delete_or_clear_buttons(callback.bot, client_chat_id, mid)
+                    # Удаление отключено — чеки сохраняются, чат как лента поездок.
+                    # for mid in _get_messages_to_clean(p_data):
+                    #     try:
+                    #         await callback.bot.delete_message(chat_id=client_chat_id, message_id=mid)
+                    #     except Exception:
+                    #         await _remove_inline_keyboard(callback.bot, client_chat_id, mid)
 
                     ord_data = data
 
@@ -2693,20 +2709,21 @@ async def start_trip_callback(callback: CallbackQuery, state: FSMContext):
 async def start_new_order_callback(callback: CallbackQuery, state: FSMContext):
     """
     Клиент нажал '🚖 Заказать такси' после завершения заказа.
-    Удаляем предыдущие сообщения (чек, кнопки); при невозможности — очищаем кнопки.
+    Удаляем только приветствие (если есть). Чеки сохраняем — чат как лента поездок.
     """
     await callback.answer()
     chat_id = callback.message.chat.id
     data = await state.get_data()
-    for mid in _get_messages_to_clean(data):
-        await _delete_or_clear_buttons(callback.bot, chat_id, mid)
-    try:
-        await callback.message.delete()
-    except Exception:
+    last_menu_id = data.get("last_menu_msg_id")
+    if isinstance(last_menu_id, int):
         try:
-            await callback.message.edit_reply_markup(reply_markup=None)
+            await callback.bot.delete_message(chat_id=chat_id, message_id=last_menu_id)
         except Exception:
             pass
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
     await state.clear()
 
     # Сразу запускаем новый заказ
@@ -2729,20 +2746,27 @@ async def rate_trip_callback(callback: CallbackQuery):
     order_id = int(parts[-1])
 
     try:
-        # Данные заказа для единого оформления (как в «Водитель найден» и в чеке)
+        # Финальная карточка заказа: маршрут, цена, водитель, оценка, кнопка Поддержка
         order_resp = await get_http_client().get(f"/taxi/order/{order_id}")
         ord_data = order_resp.json() if order_resp.status_code == 200 else {}
         driver_name = ord_data.get("driver_name", "R S")
         car_model = ord_data.get("car_model", "Гранта")
         car_number = ord_data.get("car_number", "255")
+        route_text = _format_route_from_values(
+            ord_data.get("from_address"), ord_data.get("to_address")
+        )
+        price = ord_data.get("price")
+        price_str = f"{price:.0f} руб." if isinstance(price, (int, float)) else "—"
 
         new_text = (
             "✅ Поездка завершена!\n\n"
+            f"{route_text}\n\n"
             f"🚖 Ваш заказ выполнил: {driver_name}\n"
             f"🚗 Машина: {car_model}\n"
             f"🔢 Номер: {car_number}\n\n"
+            f"💰 Стоимость: {price_str}\n\n"
             f"⭐ Ваша оценка: {rating_str} из 5\n"
-            "🙏 Спасибо за отзыв! Теперь вы можете заказать новую машину."
+            "🙏 Спасибо за отзыв!"
         )
 
         try:
