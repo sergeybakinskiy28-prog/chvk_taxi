@@ -10,4 +10,4 @@ Write-Host "--- STARTING BOT ---" -ForegroundColor Cyan
 $env:PYTHONPATH = "."
 
 # Запуск FastAPI бота так, чтобы он не выключался
-uvicorn chvk_city.backend.main:app --host 0.0.0.0 --port 8000 --reload
+Start-Process powershell -ArgumentList "uvicorn chvk_city.backend.main:app --host 0.0.0.0 --port 8000 --reload"
