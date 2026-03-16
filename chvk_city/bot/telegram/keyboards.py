@@ -126,6 +126,26 @@ def get_accept_order_keyboard(order_id: int):
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
+
+def get_eta_select_keyboard(order_id: int):
+    """Клавиатура выбора времени прибытия к клиенту (в минутах)."""
+    buttons = [
+        [
+            InlineKeyboardButton(text="1 мин", callback_data=f"eta_1_{order_id}"),
+            InlineKeyboardButton(text="3 мин", callback_data=f"eta_3_{order_id}"),
+            InlineKeyboardButton(text="5 мин", callback_data=f"eta_5_{order_id}"),
+        ],
+        [
+            InlineKeyboardButton(text="7 мин", callback_data=f"eta_7_{order_id}"),
+            InlineKeyboardButton(text="10 мин", callback_data=f"eta_10_{order_id}"),
+        ],
+        [
+            InlineKeyboardButton(text="15 мин", callback_data=f"eta_15_{order_id}"),
+            InlineKeyboardButton(text="20 мин", callback_data=f"eta_20_{order_id}"),
+        ],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
 def _yandex_route(address: str) -> str:
     """
     Формирует ссылку для Яндекс.Карт/Навигатора до указанного адреса.

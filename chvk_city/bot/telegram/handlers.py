@@ -13,6 +13,13 @@ from chvk_city.backend.database.session import async_session
 from chvk_city.backend.services.taxi_service import TaxiService
 from chvk_city.bot.telegram import keyboards
 from chvk_city.bot.telegram.constants import OWNER_ID
+from chvk_city.bot.telegram.zones_data import (
+    get_zone_by_address,
+    get_zone_price,
+    get_ride_minutes,
+    DEFAULT_ZONE_PRICE,
+    DEFAULT_PRICE_NOTE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -432,14 +439,33 @@ def _format_route_from_values(from_address: str | None, to_address: str | None) 
     return _format_route_vertical(from_address or "—", _split_destination_addresses(to_address))
 
 
-def _estimate_order_price(data: dict) -> float:
+def _estimate_order_price(data: dict) -> tuple[float, str | None]:
+    """
+    Рассчитывает стоимость заказа.
+    Возвращает (цена, примечание или None).
+    Если оба адреса опознаны по зонам — цена из ZONE_PRICES.
+    Иначе — стандартная цена и примечание «Цена рассчитана по городскому тарифу».
+    """
+    from_address = data.get("from_address") or ""
     destination_addresses = data.get("destination_addresses") or []
-    base_price = 120.0
-    destination_price = 60.0 * len(destination_addresses)
+    first_to = destination_addresses[0] if destination_addresses else ""
+
+    from_zone = get_zone_by_address(from_address)
+    to_zone = get_zone_by_address(first_to)
+    zone_price, recognized = get_zone_price(from_zone, to_zone)
+
+    if recognized:
+        base_price = zone_price
+        price_note = None
+    else:
+        base_price = DEFAULT_ZONE_PRICE
+        price_note = DEFAULT_PRICE_NOTE
+
     extra_stop_price = 40.0 * max(0, len(destination_addresses) - 1)
     child_seat_price = 50.0 if data.get("has_child_seat") else 0.0
     pet_price = 30.0 if data.get("has_pet") else 0.0
-    return base_price + destination_price + extra_stop_price + child_seat_price + pet_price
+    total = base_price + extra_stop_price + child_seat_price + pet_price
+    return total, price_note
 
 
 def _build_final_summary_text(data: dict) -> str:
@@ -447,6 +473,7 @@ def _build_final_summary_text(data: dict) -> str:
     destination_addresses = data.get("destination_addresses") or []
     order_comment = data.get("order_comment")
     price = data.get("calculated_price")
+    price_note = data.get("price_note")
     options: list[str] = []
     if data.get("has_child_seat"):
         options.append("👶 Детское кресло")
@@ -456,6 +483,8 @@ def _build_final_summary_text(data: dict) -> str:
         options.append(f"💬 {order_comment}")
     options_text = "\n".join(options) if options else "—"
     price_text = f"{price:.0f} руб." if isinstance(price, (int, float)) else "—"
+    if price_note:
+        price_text += f"\n_{price_note}_"
 
     return (
         "✅ Итог заказа\n\n"
@@ -522,6 +551,7 @@ async def _begin_order_flow(
         has_pet=False,
         order_comment=None,
         calculated_price=None,
+        price_note=None,
         is_processing=False,
         order_id=None,
     )
@@ -1578,18 +1608,19 @@ async def calculate_order_price_callback(callback: CallbackQuery, state: FSMCont
     if not destination_addresses:
         await callback.answer("Сначала добавьте хотя бы один адрес назначения.", show_alert=True)
         return
-    calculated_price = _estimate_order_price(data)
-    await state.update_data(calculated_price=calculated_price)
+    calculated_price, price_note = _estimate_order_price(data)
+    await state.update_data(calculated_price=calculated_price, price_note=price_note)
+    summary_data = {**data, "calculated_price": calculated_price, "price_note": price_note}
     await callback.answer()
     summary_message_id = callback.message.message_id
     try:
         await callback.message.edit_text(
-            _build_final_summary_text({**data, "calculated_price": calculated_price}),
+            _build_final_summary_text(summary_data),
             reply_markup=keyboards.get_order_confirmation_keyboard(),
         )
     except Exception:
         sent = await callback.message.answer(
-            _build_final_summary_text({**data, "calculated_price": calculated_price}),
+            _build_final_summary_text(summary_data),
             reply_markup=keyboards.get_order_confirmation_keyboard(),
         )
         summary_message_id = sent.message_id
@@ -1772,23 +1803,46 @@ async def finalize_order(
 
 @router.callback_query(F.data.startswith("accept_"))
 async def accept_order_callback(callback: CallbackQuery, state: FSMContext):
-    # callback.data имеет вид "accept_{order_id}"
+    """
+    Первый шаг: водитель нажал «Принять заказ».
+    Показываем выбор времени прибытия, НЕ вызываем API.
+    """
     order_id = int(callback.data.split("_")[-1])
+    await callback.answer()
+    try:
+        await callback.message.edit_text(
+            f"🚕 Заказ #{order_id}\n\n"
+            "Через сколько минут вы будете на месте?",
+            reply_markup=keyboards.get_eta_select_keyboard(order_id),
+        )
+    except Exception:
+        pass
+
+
+@router.callback_query(F.data.startswith("eta_"))
+async def eta_select_callback(callback: CallbackQuery, state: FSMContext):
+    """
+    Второй шаг: водитель выбрал время прибытия.
+    Вызываем API accept, отправляем данные водителю и пассажиру.
+    """
+    # callback.data: eta_{minutes}_{order_id}
+    parts = callback.data.split("_")
+    minutes = int(parts[1])
+    order_id = int(parts[2])
     driver_telegram_id = callback.from_user.id
-    
+
     try:
         response = await get_http_client().post(
             "/taxi/accept",
             json={
                 "order_id": order_id,
-                "driver_telegram_id": driver_telegram_id
-            }
+                "driver_telegram_id": driver_telegram_id,
+            },
         )
-        
+
         if response.status_code == 200:
             order = response.json()
 
-            # Краткое подтверждение в чате, где нажата кнопка (группа водителей)
             await callback.answer("Вы приняли заказ! ✅")
             try:
                 await callback.message.edit_text(
@@ -1798,12 +1852,13 @@ async def accept_order_callback(callback: CallbackQuery, state: FSMContext):
             except Exception:
                 pass
 
-            # Отправляем карточку заказа в ЛИЧНЫЕ сообщения водителю
+            # Карточка заказа в личку водителю (адрес, телефон)
             try:
                 route_text = _format_route_from_values(order.get("from_address"), order.get("to_address"))
                 card_text = (
                     f"🚕 **Вы приняли заказ #{order_id}**\n\n"
-                    f"👤 Клиент: {order.get('client_phone', 'не указан')}\n"
+                    f"📍 Адрес: {order.get('from_address', '—')}\n"
+                    f"👤 Телефон клиента: {order.get('client_phone', 'не указан')}\n\n"
                     f"{route_text}"
                     + (f"\n💬 Примечание: {order.get('comment')}" if order.get('comment') else "\n💬 Примечание: Нет")
                 )
@@ -1817,38 +1872,33 @@ async def accept_order_callback(callback: CallbackQuery, state: FSMContext):
                 )
             except Exception as e:
                 logger.exception(f"Error sending private order card to driver {driver_telegram_id}: {e}")
-            
-            # Notify client with real car details и кнопкой связи (только звонок на этапе accepted).
-            # Защита от ситуации, когда по ошибке в БД хранится ID бота (bots can't send messages to bots).
-            client_chat_id = order['client_telegram_id']
-            driver_phone = order.get("driver_phone")
+
+            # Уведомление пассажиру: ETA + данные машины + время в пути
+            client_chat_id = order.get("client_telegram_id")
             try:
                 me = await callback.bot.get_me()
                 if client_chat_id == me.id:
-                    logger.warning(
-                        "Попытка отправить сообщение самому боту (client_telegram_id=%s). "
-                        "Телеграм не позволяет ботам писать ботам.",
-                        client_chat_id,
-                    )
-                else:
-                    route_text = _format_route_from_values(order.get("from_address"), order.get("to_address"))
+                    logger.warning("Попытка отправить сообщение самому боту (client_telegram_id=%s)", client_chat_id)
+                elif client_chat_id:
+                    from_addr = order.get("from_address") or ""
+                    to_addr = order.get("to_address") or ""
+                    ride_mins = get_ride_minutes(from_addr, to_addr)
+                    route_text = _format_route_from_values(from_addr, to_addr)
+                    driver_name = callback.from_user.full_name or "Водитель"
                     text = (
-                        "🚕 Водитель принял ваш заказ и выезжает!\n\n"
+                        f"🚕 Водитель {driver_name} принял ваш заказ!\n"
+                        f"Он будет у вас примерно через {minutes} мин.\n\n"
                         f"{route_text}\n\n"
-                        f"👤 Имя: {callback.from_user.full_name}\n"
-                        f"🚗 Машина: {order['car_model']}\n"
-                        f"🔢 Номер: {order['car_number']}"
+                        f"🚗 Машина: {order.get('car_model', '—')}\n"
+                        f"🔢 Номер: {order.get('car_number', '—')}\n\n"
+                        f"⏱ Время в пути — ~{ride_mins} мин."
                     )
-                    if client_chat_id == me.id:
-                        logger.warning("Ошибка: попытка отправить сообщение боту")
-                        return
                     logger.info("Sending accept notification to passenger %s for order %s", client_chat_id, order_id)
                     sent_msg = await callback.bot.send_message(
                         client_chat_id,
                         text,
                         reply_markup=keyboards.get_client_after_accept_keyboard(order_id),
                     )
-
                     p_state = _get_passenger_state(callback.bot, state.storage, client_chat_id)
                     pdata = await p_state.get_data()
                     to_del = pdata.get("msg_to_delete", [])
@@ -1877,8 +1927,9 @@ async def accept_order_callback(callback: CallbackQuery, state: FSMContext):
             )
             await callback.answer(detail_msg, show_alert=True)
     except Exception as e:
-        logger.exception(f"Error in accept_order_callback: {e}")
+        logger.exception(f"Error in eta_select_callback: {e}")
         await callback.answer("❌ Ошибка при принятии заказа", show_alert=True)
+
 
 @router.callback_query(F.data.startswith("complete_"))
 async def complete_order_callback(callback: CallbackQuery, state: FSMContext):
