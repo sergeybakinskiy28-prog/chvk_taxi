@@ -164,15 +164,18 @@ def get_post_accept_driver_keyboard(order_id: int):
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def get_client_after_accept_keyboard(order_id: int):
+def get_client_after_accept_keyboard(order_id: int, driver_telegram_id: int | None = None):
     """
-    Клавиатура для клиента сразу после принятия заказа водителем:
-    связь с водителем и поддержка (сопровождает пассажира на всех этапах).
+    Главный «пульт управления» заказом: Написать водителю, Позвонить, Поддержка.
     """
     buttons: list[list[InlineKeyboardButton]] = [
-        [InlineKeyboardButton(text="📞 Связаться", callback_data=f"client_call_{order_id}")],
+        [InlineKeyboardButton(text="📞 Позвонить", callback_data=f"client_call_{order_id}")],
         [InlineKeyboardButton(text="💬 Поддержка", url=_support_url())],
     ]
+    if driver_telegram_id is not None:
+        buttons.insert(0, [
+            InlineKeyboardButton(text="💬 Написать", url=f"tg://user?id={driver_telegram_id}")
+        ])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -345,14 +348,10 @@ def get_new_order_after_rating_keyboard():
 def get_client_at_place_keyboard(order_id: int, driver_phone: str | None):
     """
     Клавиатура для клиента, когда водитель на месте.
-    - '🏃 Выхожу!' — уведомление водителю
-    - '📱 Позвонить' — связь с водителем
-    - '💬 Поддержка' — на всех этапах
+    Только «Выхожу!» — связь и поддержка в главном блоке заказа выше.
     """
     buttons: list[list[InlineKeyboardButton]] = [
         [InlineKeyboardButton(text="🏃 Выхожу!", callback_data=f"client_out_{order_id}")],
-        [InlineKeyboardButton(text="📱 Позвонить", callback_data=f"client_call_{order_id}")],
-        [InlineKeyboardButton(text="💬 Поддержка", url=_support_url())],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 

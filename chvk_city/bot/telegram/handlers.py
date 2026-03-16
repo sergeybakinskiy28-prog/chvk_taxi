@@ -281,6 +281,23 @@ async def _delete_messages(bot, chat_id: int, message_ids: list[int] | None):
             pass
 
 
+async def _delete_or_clear_buttons(bot, chat_id: int, message_id: int):
+    """
+    Удаляет сообщение. Если не удалось (например, старше 48 ч) — очищает кнопки.
+    """
+    try:
+        await bot.delete_message(chat_id=chat_id, message_id=message_id)
+    except Exception:
+        try:
+            await bot.edit_message_reply_markup(
+                chat_id=chat_id,
+                message_id=message_id,
+                reply_markup=None,
+            )
+        except Exception:
+            pass
+
+
 async def _remove_inline_keyboard(bot, chat_id: int, message_id: int) -> bool:
     """Удаляет Inline-клавиатуру у сообщения. Возвращает True при успехе."""
     try:
@@ -613,13 +630,13 @@ async def cmd_start(message: Message, state: FSMContext):
         "Привет! Я помогу вам быстро заказать такси. Нажмите на кнопку ниже, чтобы начать.",
         reply_markup=keyboards.get_start_order_inline_keyboard(),
     )
-    await message.answer(
-        "\u200b",  # Невидимый символ (без текста «Дополнительные функции...»)
+    menu_msg = await message.answer(
+        "\u200b",
         reply_markup=await _get_menu_for_user(message.from_user.id),
     )
     await state.update_data(
         last_menu_msg_id=welcome.message_id,
-        start_message_ids=[welcome.message_id],
+        start_message_ids=[welcome.message_id, menu_msg.message_id],
     )
 
 @router.message(F.contact)
@@ -647,14 +664,20 @@ async def process_contact(message: Message, state: FSMContext):
         reply_markup=await _get_menu_for_user(message.from_user.id)
     )
 
-def _get_order_button_msg_ids(data: dict) -> list[int]:
-    """Собирает ID сообщений с кнопкой «Заказать такси» и поддержкой для очистки."""
+def _get_messages_to_clean(data: dict) -> list[int]:
+    """Собирает ID всех сообщений для удаления (приветствие, чек, кнопки заказа и т.д.)."""
     ids: list[int] = []
     for key in ("last_menu_msg_id", "last_new_order_prompt_id"):
         mid = data.get(key)
         if isinstance(mid, int) and mid not in ids:
             ids.append(mid)
+    for mid in data.get("start_message_ids") or []:
+        if isinstance(mid, int) and mid not in ids:
+            ids.append(mid)
     for mid in data.get("messages_with_support") or []:
+        if isinstance(mid, int) and mid not in ids:
+            ids.append(mid)
+    for mid in data.get("msg_to_delete") or []:
         if isinstance(mid, int) and mid not in ids:
             ids.append(mid)
     return ids
@@ -663,10 +686,11 @@ def _get_order_button_msg_ids(data: dict) -> list[int]:
 @router.message(F.text == "🚖 Заказать такси")
 @router.message(F.text == "🚕 Заказать такси")
 async def taxi_order_start(message: Message, state: FSMContext):
-    # Гарантированно убираем Inline-клавиатуру у приветствия и «Заказать такси» после поездки
+    # ОБЯЗАТЕЛЬНО: удаляем предыдущие сообщения через bot.delete_message
+    # (приветствие, чек, кнопки заказа). Если сообщение старше 48 ч — очищаем кнопки.
     data = await state.get_data()
-    for mid in _get_order_button_msg_ids(data):
-        await _remove_inline_keyboard(message.bot, message.chat.id, mid)
+    for mid in _get_messages_to_clean(data):
+        await _delete_or_clear_buttons(message.bot, message.chat.id, mid)
     await state.clear()
 
     await _begin_order_flow(
@@ -682,9 +706,15 @@ async def start_order_inline_callback(callback: CallbackQuery, state: FSMContext
     await callback.answer()
     chat_id = callback.message.chat.id
     data = await state.get_data()
-    for mid in _get_order_button_msg_ids(data):
-        await _remove_inline_keyboard(callback.bot, chat_id, mid)
-    await _remove_inline_keyboard(callback.bot, chat_id, callback.message.message_id)
+    for mid in _get_messages_to_clean(data):
+        await _delete_or_clear_buttons(callback.bot, chat_id, mid)
+    try:
+        await callback.message.delete()
+    except Exception:
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
     await state.clear()
     await _begin_order_flow(
         callback.message,
@@ -1917,10 +1947,11 @@ async def eta_select_callback(callback: CallbackQuery, state: FSMContext):
                         f"⏱ Время в пути — ~{ride_mins} мин."
                     )
                     logger.info("Sending accept notification to passenger %s for order %s", client_chat_id, order_id)
+                    driver_tg_id = callback.from_user.id
                     sent_msg = await callback.bot.send_message(
                         client_chat_id,
                         text,
-                        reply_markup=keyboards.get_client_after_accept_keyboard(order_id),
+                        reply_markup=keyboards.get_client_after_accept_keyboard(order_id, driver_tg_id),
                     )
                     p_state = _get_passenger_state(callback.bot, state.storage, client_chat_id)
                     pdata = await p_state.get_data()
@@ -1996,13 +2027,9 @@ async def complete_order_callback(callback: CallbackQuery, state: FSMContext):
                         return
                     p_state = _get_passenger_state(callback.bot, state.storage, client_chat_id)
                     p_data = await p_state.get_data()
-                    msg_to_delete = p_data.get("msg_to_delete") or []
-                    last_old_prompt_id = p_data.get("last_new_order_prompt_id")
-                    # Убираем кнопки у предыдущих сообщений цикла (не удаляем сами сообщения)
-                    for mid in msg_to_delete:
-                        await _remove_inline_keyboard(callback.bot, client_chat_id, mid)
-                    if isinstance(last_old_prompt_id, int):
-                        await _remove_inline_keyboard(callback.bot, client_chat_id, last_old_prompt_id)
+                    # Удаляем предыдущие сообщения пассажира; при невозможности — очищаем кнопки
+                    for mid in _get_messages_to_clean(p_data):
+                        await _delete_or_clear_buttons(callback.bot, client_chat_id, mid)
 
                     ord_data = data
 
@@ -2397,11 +2424,11 @@ async def client_out_callback(callback: CallbackQuery, state: FSMContext):
             else:
                 logger.error(f"driver_telegram_id is None for order {order_id} in client_out_callback")
 
-            # Обновляем сообщение клиента и оставляем только кнопку связи
+            # Обновляем сообщение клиента — только информационный текст, без кнопок
             try:
                 mobj = await callback.message.edit_text(
                     "✅ Водитель уведомлен. Пожалуйста, выходите к машине. Приятного пути! 🚕",
-                    reply_markup=keyboards.get_client_after_out_keyboard(order_id),
+                    reply_markup=None,
                 )
                 p_state = _get_passenger_state(callback.bot, state.storage, callback.from_user.id)
                 pdata = await p_state.get_data()
@@ -2636,7 +2663,6 @@ async def start_trip_callback(callback: CallbackQuery, state: FSMContext):
                     sent = await callback.bot.send_message(
                         client_chat_id,
                         "🚀 Поехали! Приятного пути.",
-                        reply_markup=keyboards.get_support_only_keyboard(),
                     )
                     # Добавить новое сообщение пассажиру в список msg_to_delete
                     to_del = p_data.get("msg_to_delete", [])
@@ -2667,14 +2693,20 @@ async def start_trip_callback(callback: CallbackQuery, state: FSMContext):
 async def start_new_order_callback(callback: CallbackQuery, state: FSMContext):
     """
     Клиент нажал '🚖 Заказать такси' после завершения заказа.
-    Убираем все предыдущие кнопки (заказ, поддержка под чеками).
+    Удаляем предыдущие сообщения (чек, кнопки); при невозможности — очищаем кнопки.
     """
     await callback.answer()
     chat_id = callback.message.chat.id
     data = await state.get_data()
-    for mid in _get_order_button_msg_ids(data):
-        await _remove_inline_keyboard(callback.bot, chat_id, mid)
-    await _remove_inline_keyboard(callback.bot, chat_id, callback.message.message_id)
+    for mid in _get_messages_to_clean(data):
+        await _delete_or_clear_buttons(callback.bot, chat_id, mid)
+    try:
+        await callback.message.delete()
+    except Exception:
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
     await state.clear()
 
     # Сразу запускаем новый заказ
