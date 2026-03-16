@@ -634,9 +634,11 @@ async def cmd_start(message: Message, state: FSMContext):
         "\u200b",
         reply_markup=await _get_menu_for_user(message.from_user.id),
     )
+    messages_to_delete = [welcome.message_id, menu_msg.message_id]
     await state.update_data(
         last_menu_msg_id=welcome.message_id,
         start_message_ids=[welcome.message_id, menu_msg.message_id],
+        messages_to_delete=messages_to_delete,
     )
 
 @router.message(F.contact)
@@ -700,9 +702,11 @@ async def _delete_or_clear_buttons_safe(bot, chat_id: int, message_id: int):
 async def taxi_order_start(message: Message, state: FSMContext):
     # Kill list: приветствие, «Заказать такси» после поездки, «Дополнительные функции»
     data = await state.get_data()
+    messages_to_delete = data.get("messages_to_delete", [])
     for mid in _get_technical_messages_kill_list(data):
         await _delete_or_clear_buttons_safe(message.bot, message.chat.id, mid)
     await state.clear()
+    await state.update_data(messages_to_delete=messages_to_delete)
 
     await _begin_order_flow(
         message,
@@ -717,6 +721,7 @@ async def start_order_inline_callback(callback: CallbackQuery, state: FSMContext
     await callback.answer()
     chat_id = callback.message.chat.id
     data = await state.get_data()
+    messages_to_delete = data.get("messages_to_delete", [])
     for mid in _get_technical_messages_kill_list(data):
         await _delete_or_clear_buttons_safe(callback.bot, chat_id, mid)
     try:
@@ -724,6 +729,7 @@ async def start_order_inline_callback(callback: CallbackQuery, state: FSMContext
     except Exception:
         pass
     await state.clear()
+    await state.update_data(messages_to_delete=messages_to_delete)
     await _begin_order_flow(
         callback.message,
         state,
@@ -1683,7 +1689,10 @@ async def calculate_order_price_callback(callback: CallbackQuery, state: FSMCont
             reply_markup=keyboards.get_order_confirmation_keyboard(),
         )
         summary_message_id = sent.message_id
-    await state.update_data(msg_to_delete=[summary_message_id])
+    msg_to_del = data.get("messages_to_delete", [])
+    if summary_message_id not in msg_to_del:
+        msg_to_del.append(summary_message_id)
+    await state.update_data(msg_to_delete=[summary_message_id], messages_to_delete=msg_to_del)
     await state.set_state(OrderTaxi.waiting_for_confirmation)
 
 
@@ -2082,9 +2091,15 @@ async def complete_order_callback(callback: CallbackQuery, state: FSMContext):
 
                     main_card_id = p_data.get("main_card_id") or p_data.get("active_message_id")
                     notification_id = p_data.get("notification_id")
-                    if isinstance(notification_id, int):
+                    messages_to_delete = list(p_data.get("messages_to_delete") or [])
+                    if isinstance(notification_id, int) and notification_id not in messages_to_delete:
+                        messages_to_delete.append(notification_id)
+                    mid = p_data.get("last_new_order_prompt_id")
+                    if isinstance(mid, int) and mid not in messages_to_delete:
+                        messages_to_delete.append(mid)
+                    for msg_id in messages_to_delete:
                         try:
-                            await callback.bot.delete_message(chat_id=client_chat_id, message_id=notification_id)
+                            await callback.bot.delete_message(chat_id=client_chat_id, message_id=msg_id)
                         except Exception:
                             pass
                     edited = False
@@ -2113,18 +2128,6 @@ async def complete_order_callback(callback: CallbackQuery, state: FSMContext):
                         main_card_id = receipt_msg.message_id
 
                     logger.info("Sending complete notification to passenger %s for order %s", client_chat_id, order_id)
-
-                    new_order_prompt = await callback.bot.send_message(
-                        chat_id=client_chat_id,
-                        text="🚖 Нажмите кнопку ниже, чтобы заказать такси:",
-                        reply_markup=keyboards.get_new_order_after_rating_keyboard(),
-                    )
-                    to_del = p_data.get("msg_to_delete", [])
-                    to_del.append(new_order_prompt.message_id)
-                    await p_state.update_data(
-                        msg_to_delete=to_del,
-                        last_new_order_prompt_id=new_order_prompt.message_id,
-                    )
                 except Exception as e:
                     logger.exception(f"Error sending 'trip completed' (receipt) message to client {client_chat_id}: {e}")
 
@@ -2217,7 +2220,8 @@ async def cancel_order_callback(callback: CallbackQuery, state: FSMContext):
             await callback.answer("Заказ отменен ❌")
             try:
                 await callback.message.edit_text(
-                    f"❌ Заказ #{order_id} был отменен вами."
+                    f"❌ Заказ #{order_id} был отменен вами.",
+                    reply_markup=keyboards.get_start_order_inline_keyboard(),
                 )
             except Exception:
                 pass
