@@ -1,6 +1,7 @@
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 import urllib.parse
 
+from chvk_city.backend.config import settings
 from chvk_city.bot.telegram.constants import OWNER_ID
 
 
@@ -283,7 +284,7 @@ def get_order_manage_keyboard(order_id: int):
 
 def get_rate_trip_keyboard(order_id: int):
     """
-    Клавиатура для оценки поездки клиентом (1–5 звёзд).
+    Клавиатура для оценки поездки клиентом (1–5 звёзд) + кнопка поддержки.
     """
     buttons = [
         [
@@ -294,7 +295,22 @@ def get_rate_trip_keyboard(order_id: int):
             InlineKeyboardButton(text="⭐ 5", callback_data=f"rate_5_{order_id}"),
         ],
     ]
+    admin_username = getattr(settings, "ADMIN_USERNAME", "") or ""
+    if admin_username.strip():
+        username = admin_username.strip().lstrip("@")
+        buttons.append([InlineKeyboardButton(text="💬 Поддержка", url=f"https://t.me/{username}")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_support_only_keyboard():
+    """Клавиатура только с кнопкой «Поддержка» (для сообщений после оценки)."""
+    admin_username = getattr(settings, "ADMIN_USERNAME", "") or ""
+    if not admin_username.strip():
+        return None
+    username = admin_username.strip().lstrip("@")
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💬 Поддержка", url=f"https://t.me/{username}")],
+    ])
 
 
 def get_new_order_after_rating_keyboard():

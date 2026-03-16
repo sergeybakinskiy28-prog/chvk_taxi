@@ -4,6 +4,7 @@ class Settings(BaseSettings):
     TELEGRAM_BOT_TOKEN: str
     DRIVER_CHAT_ID: int
     ADMIN_CHAT_ID: int
+    ADMIN_USERNAME: str = ""  # Логин админа для кнопки «Поддержка» (без @), например: my_admin
     DATABASE_URL: str
     SECRET_KEY: str
     API_BASE_URL: str = "http://api:8000"

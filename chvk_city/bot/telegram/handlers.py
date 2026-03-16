@@ -1046,12 +1046,12 @@ async def owner_list_drivers(message: Message):
 
     lines = ["👥 Водители в штате:\n"]
     for d in drivers:
-        did = d.get("id")
         name = d.get("name") or "—"
+        tg_id = d.get("telegram_id") or "—"
         car_model = d.get("car_model") or "—"
         car_number = d.get("car_number") or "—"
         district = d.get("current_district") or "—"
-        lines.append(f"ID {did} | {name} | {car_model} ({car_number}) | {district}")
+        lines.append(f"🚖 {name} (ID: {tg_id})\n   {car_model} ({car_number}) | {district}")
 
     await message.answer(
         "\n".join(lines),
@@ -1268,7 +1268,7 @@ async def admin_list_drivers(message: Message):
         if not tg_id:
             continue
         text = (
-            f"👤 {name}\n"
+            f"🚖 {name} (ID: {tg_id})\n"
             f"🚗 {car_model} ({car_number})\n"
             f"📍 Статус: {status}"
         )
@@ -2611,9 +2611,10 @@ async def rate_trip_callback(callback: CallbackQuery):
         )
 
         try:
+            support_kb = keyboards.get_support_only_keyboard()
             await callback.message.edit_text(
                 new_text,
-                reply_markup=None,
+                reply_markup=support_kb,
             )
         except Exception:
             pass
