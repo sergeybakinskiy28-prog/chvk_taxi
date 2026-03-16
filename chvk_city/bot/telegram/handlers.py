@@ -109,13 +109,14 @@ async def process_to_address(message: Message, state: FSMContext):
         return
     data = await state.get_data()
     prev_msg_ids = data.get("msg_to_delete", [])
+    edit_id = data.get("route_message_id") or (prev_msg_ids[-1] if prev_msg_ids else None)
     try:
         await message.delete()
     except Exception:
         pass
-    await _delete_messages(message.bot, message.chat.id, prev_msg_ids)
-    await state.update_data(msg_to_delete=[])
-    await _save_destination_and_show_options(message, state, to_address, message.from_user.id)
+    await _save_destination_and_show_options(
+        message, state, to_address, message.from_user.id, edit_message_id=edit_id
+    )
 
 
 @router.message(OrderTaxi.waiting_for_comment, F.text)
@@ -311,26 +312,15 @@ async def _prompt_for_from_address(target_message: Message, state: FSMContext, t
     data = await state.get_data()
     msg_list = data.get("msg_to_delete", [])
 
-    if recent_addresses:
-        sent = await target_message.answer(
-            "🗺️ Откуда вас забрать?\nВыберите из недавних или введите новый:",
-            reply_markup=_build_recent_addresses_keyboard(recent_addresses, "from"),
-        )
-        msg_list.append(sent.message_id)
-        await state.update_data(
-            msg_to_delete=msg_list,
-            recent_from_addresses=recent_addresses,
-        )
-    else:
-        sent = await target_message.answer(
-            "🗺️ Откуда вас забрать?\nВведите адрес вручную:",
-            reply_markup=ReplyKeyboardRemove(),
-        )
-        msg_list.append(sent.message_id)
-        await state.update_data(
-            msg_to_delete=msg_list,
-            recent_from_addresses=[],
-        )
+    sent = await target_message.answer(
+        "🗺️ Откуда вас забрать?\nВыберите из списка ниже или введите новый:",
+        reply_markup=_build_recent_addresses_keyboard(recent_addresses, "from"),
+    )
+    msg_list.append(sent.message_id)
+    await state.update_data(
+        msg_to_delete=msg_list,
+        recent_from_addresses=recent_addresses,
+    )
 
     await state.set_state(OrderTaxi.waiting_for_from_address)
 
@@ -340,31 +330,32 @@ async def _prompt_for_to_address(target_message: Message, state: FSMContext, tel
     data = await state.get_data()
     msg_list = data.get("msg_to_delete", [])
 
-    if recent_addresses:
-        sent = await target_message.answer(
-            "🏁 Куда едем?\nВыберите из недавних или введите новый:",
-            reply_markup=_build_recent_addresses_keyboard(recent_addresses, "to"),
-        )
-        msg_list.append(sent.message_id)
-        await state.update_data(
-            msg_to_delete=msg_list,
-            recent_to_addresses=recent_addresses,
-        )
-    else:
-        sent = await target_message.answer(
-            "🏁 Куда едем?\nВведите адрес вручную:",
-            reply_markup=ReplyKeyboardRemove(),
-        )
-        msg_list.append(sent.message_id)
-        await state.update_data(
-            msg_to_delete=msg_list,
-            recent_to_addresses=[],
-        )
+    sent = await target_message.answer(
+        "🏁 Куда едем?\nВыберите из списка ниже или введите новый:",
+        reply_markup=_build_recent_addresses_keyboard(recent_addresses, "to"),
+    )
+    msg_list.append(sent.message_id)
+    await state.update_data(
+        msg_to_delete=msg_list,
+        recent_to_addresses=recent_addresses,
+    )
 
     await state.set_state(OrderTaxi.waiting_for_to_address)
 
 
-async def _save_destination_and_show_options(target_message: Message, state: FSMContext, address: str, user_id: int):
+def _build_route_with_add_more_prompt(from_address: str, destination_addresses: list[str]) -> str:
+    """Текст для этапа «добавить ещё остановку»: маршрут + подсказка."""
+    route = _format_route_vertical(from_address, destination_addresses)
+    return f"{route}\n\nВыберите адрес из списка ниже или введите новый вручную:"
+
+
+async def _save_destination_and_show_options(
+    target_message: Message,
+    state: FSMContext,
+    address: str,
+    user_id: int,
+    edit_message_id: int | None = None,
+):
     data = await state.get_data()
     msg_list = data.get("msg_to_delete", [])
     destination_addresses = data.get("destination_addresses", [])
@@ -373,21 +364,35 @@ async def _save_destination_and_show_options(target_message: Message, state: FSM
         destination_addresses=destination_addresses,
         to_address="\n".join(destination_addresses),
     )
-    await _delete_messages(target_message.bot, target_message.chat.id, msg_list)
-    msg_list = []
     print(
         f"DEBUG ORDER: destination added='{address}', route={destination_addresses}, user={user_id}",
         flush=True,
     )
     from_address = data.get("from_address", "—")
-    sent = await target_message.answer(
+    route_text = (
         "📍 Адрес добавлен в маршрут.\n\n"
         "Ваш маршрут:\n"
-        f"{_format_route_vertical(from_address, destination_addresses)}",
-        reply_markup=keyboards.get_destination_flow_keyboard(),
+        f"{_format_route_vertical(from_address, destination_addresses)}"
     )
-    msg_list.append(sent.message_id)
-    await state.update_data(msg_to_delete=msg_list)
+    keyboard = keyboards.get_destination_flow_keyboard()
+
+    if edit_message_id:
+        try:
+            await target_message.bot.edit_message_text(
+                chat_id=target_message.chat.id,
+                message_id=edit_message_id,
+                text=route_text,
+                reply_markup=keyboard,
+            )
+        except Exception:
+            await _delete_messages(target_message.bot, target_message.chat.id, [edit_message_id])
+            sent = await target_message.answer(route_text, reply_markup=keyboard)
+            edit_message_id = sent.message_id
+        await state.update_data(msg_to_delete=[edit_message_id], route_message_id=edit_message_id)
+    else:
+        await _delete_messages(target_message.bot, target_message.chat.id, msg_list)
+        sent = await target_message.answer(route_text, reply_markup=keyboard)
+        await state.update_data(msg_to_delete=[sent.message_id], route_message_id=sent.message_id)
 
 
 def _build_order_options_text(from_address: str, destination_addresses: list[str], order_comment: str | None = None) -> str:
@@ -616,7 +621,10 @@ async def start_order_inline_callback(callback: CallbackQuery, state: FSMContext
     await callback.answer()
     data = await state.get_data()
     start_message_ids = data.get("start_message_ids", [])
-    old_msg_ids = data.get("msg_to_delete", [])
+    old_msg_ids = list(data.get("msg_to_delete", []))
+    cancel_msg_id = data.get("last_cancel_msg_id")
+    if isinstance(cancel_msg_id, int) and cancel_msg_id not in old_msg_ids:
+        old_msg_ids.append(cancel_msg_id)
     await state.clear()
     try:
         await callback.message.delete()
@@ -1384,18 +1392,24 @@ async def manual_from_callback(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "manual_to", OrderTaxi.waiting_for_to_address)
 async def manual_to_callback(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
+    data = await state.get_data()
+    destination_addresses = data.get("destination_addresses", [])
+    from_address = data.get("from_address", "—")
+    if destination_addresses:
+        text = (
+            f"{_format_route_vertical(from_address, destination_addresses)}\n\n"
+            "Напишите адрес следующей остановки:"
+        )
+    else:
+        text = "Напишите адрес улицы и номер дома (куда едем):"
     try:
-        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.message.edit_text(text=text, reply_markup=None)
     except Exception:
         pass
-    sent = await callback.message.answer(
-        "Напишите адрес улицы и номер дома (куда едем):",
-        reply_markup=ReplyKeyboardRemove(),
+    await state.update_data(
+        msg_to_delete=[callback.message.message_id],
+        route_message_id=callback.message.message_id,
     )
-    data = await state.get_data()
-    msg_list = data.get("msg_to_delete", [])
-    msg_list.append(sent.message_id)
-    await state.update_data(msg_to_delete=msg_list)
 
 
 @router.callback_query(F.data.startswith("recent_from_"), OrderTaxi.waiting_for_from_address)
@@ -1438,31 +1452,41 @@ async def recent_to_callback(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_reply_markup(reply_markup=None)
     except Exception:
         pass
-    msg_list = data.get("msg_to_delete", [])
-    msg_list.append(callback.message.message_id)
-    await _delete_messages(callback.bot, callback.message.chat.id, msg_list)
-    await state.update_data(msg_to_delete=[])
-    await _save_destination_and_show_options(callback.message, state, to_address, callback.from_user.id)
+    await _save_destination_and_show_options(
+        callback.message,
+        state,
+        to_address,
+        callback.from_user.id,
+        edit_message_id=callback.message.message_id,
+    )
 
 
 @router.callback_query(F.data == "add_more_address", OrderTaxi.waiting_for_to_address)
 async def add_more_address_callback(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    from_address = data.get("from_address", "—")
+    destination_addresses = data.get("destination_addresses", [])
+    if not destination_addresses:
+        await callback.answer("Сначала добавьте адрес назначения.", show_alert=True)
+        return
     await callback.answer()
+    recent_addresses = await _get_recent_addresses(callback.from_user.id, "to")
+    text = _build_route_with_add_more_prompt(from_address, destination_addresses)
+    keyboard = _build_recent_addresses_keyboard(recent_addresses, "to")
     try:
-        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.message.edit_text(
+            text=text,
+            reply_markup=keyboard,
+        )
+        route_msg_id = callback.message.message_id
     except Exception:
-        pass
-    data = await state.get_data()
-    await _delete_messages(callback.bot, callback.message.chat.id, data.get("msg_to_delete", []))
-    await state.update_data(msg_to_delete=[])
-    sent = await callback.message.answer(
-        "Напишите следующий адрес назначения:",
-        reply_markup=ReplyKeyboardRemove(),
+        sent = await callback.message.answer(text, reply_markup=keyboard)
+        route_msg_id = sent.message_id
+    await state.update_data(
+        msg_to_delete=[route_msg_id],
+        route_message_id=route_msg_id,
+        recent_to_addresses=recent_addresses,
     )
-    data = await state.get_data()
-    msg_list = data.get("msg_to_delete", [])
-    msg_list.append(sent.message_id)
-    await state.update_data(msg_to_delete=msg_list)
 
 
 @router.callback_query(F.data == "finish_route", OrderTaxi.waiting_for_to_address)
@@ -1587,8 +1611,10 @@ async def confirm_order_creation_callback(callback: CallbackQuery, state: FSMCon
 @router.callback_query(F.data == "cancel_order_creation", OrderTaxi.waiting_for_confirmation)
 async def cancel_order_creation_callback(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
+    data = await state.get_data()
+    prev_cancel_id = data.get("last_cancel_msg_id")
     await state.clear()
-    # Удаляем сообщение с итогом/опциями, чтобы очистить чат
+    # Удаляем сообщение с итогом/опциями
     try:
         await callback.message.delete()
     except Exception:
@@ -1596,10 +1622,19 @@ async def cancel_order_creation_callback(callback: CallbackQuery, state: FSMCont
             await callback.message.edit_reply_markup(reply_markup=None)
         except Exception:
             pass
-    await callback.message.answer(
+    if prev_cancel_id:
+        try:
+            await callback.bot.delete_message(
+                chat_id=callback.message.chat.id,
+                message_id=prev_cancel_id,
+            )
+        except Exception:
+            pass
+    sent = await callback.message.answer(
         "Заказ отменен. Вы можете начать новый заказ в любое время.",
         reply_markup=keyboards.get_start_order_inline_keyboard(),
     )
+    await state.update_data(last_cancel_msg_id=sent.message_id)
 
 
 async def finalize_order(
@@ -2525,8 +2560,10 @@ async def start_new_order_callback(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     old_msg_ids = list(data.get("msg_to_delete", []))
     prompt_id = data.get("last_new_order_prompt_id")
-    if isinstance(prompt_id, int) and prompt_id not in old_msg_ids:
-        old_msg_ids.append(prompt_id)
+    cancel_id = data.get("last_cancel_msg_id")
+    for mid in (prompt_id, cancel_id):
+        if isinstance(mid, int) and mid not in old_msg_ids:
+            old_msg_ids.append(mid)
     await state.clear()
 
     # Шаг 1: удаляем сообщение «Нажмите кнопку ниже» и все связанные системные сообщения
