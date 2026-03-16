@@ -351,7 +351,7 @@ async def _save_destination_and_show_options(target_message: Message, state: FSM
     destination_addresses.append(address)
     await state.update_data(
         destination_addresses=destination_addresses,
-        to_address=" -> ".join(destination_addresses),
+        to_address="\n".join(destination_addresses),
     )
     print(
         f"DEBUG ORDER: destination added='{address}', route={destination_addresses}, user={user_id}",
@@ -397,7 +397,8 @@ def _format_route_vertical(from_address: str, destination_addresses: list[str]) 
 def _split_destination_addresses(to_address: str | None) -> list[str]:
     if not to_address:
         return []
-    return [part.strip() for part in to_address.split(" -> ") if part.strip()]
+    normalized = to_address.replace(" -> ", "\n")
+    return [part.strip() for part in normalized.splitlines() if part.strip()]
 
 
 def _format_route_from_values(from_address: str | None, to_address: str | None) -> str:
@@ -1400,7 +1401,7 @@ async def finish_route_callback(callback: CallbackQuery, state: FSMContext):
     except Exception:
         pass
     await state.update_data(
-        to_address=" -> ".join(destination_addresses),
+        to_address="\n".join(destination_addresses),
         has_child_seat=bool(data.get("has_child_seat", False)),
         has_pet=bool(data.get("has_pet", False)),
         order_comment=data.get("order_comment"),
@@ -1544,14 +1545,14 @@ async def finalize_order(
 
     from_address = data.get('from_address')
     destination_addresses = data.get("destination_addresses") or []
-    to_address = data.get('to_address') or " -> ".join(destination_addresses)
+    to_address = data.get('to_address') or "\n".join(destination_addresses)
     
     if not from_address or not destination_addresses:
         await message.answer("❌ Ошибка: адрес отправления или назначения не указан.")
         await state.clear()
         return
 
-    route_display = " -> ".join(destination_addresses)
+    route_display = "\n".join(destination_addresses)
     final_comment = _build_order_comment_payload(data, explicit_comment=comment)
     calculated_price = data.get("calculated_price")
     route_vertical = _format_route_vertical(from_address, destination_addresses)
@@ -2530,6 +2531,16 @@ async def rate_trip_callback(callback: CallbackQuery):
     except Exception as e:
         logger.exception(f"Error fetching order for rating notification: {e}")
 
+# Блокируем любой текст на этапах опций и подтверждения заказа.
+# Исключение: комментарий принимается только в состоянии waiting_for_comment.
+@router.message(OrderTaxi.waiting_for_options)
+@router.message(OrderTaxi.waiting_for_confirmation)
+async def any_text_in_order_process(message: Message):
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
 # Последний хендлер в файле — блокировщик: если бот в любом состоянии (ждёт адрес и т.д.), не трогаем сообщение
 
 # Кнопки и команды, сообщения с которыми НЕ удаляем (админка/меню)
@@ -2537,6 +2548,7 @@ _ADMIN_SAFE_TEXTS = {
     "/start",
     "/driver",
     "🚕 Заказать такси",
+    "🚖 Заказать такси",
     "🗂 Мои заказы",
     "📞 Поддержка",
     "💼 Кабинет водителя",
