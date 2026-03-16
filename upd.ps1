@@ -9,5 +9,5 @@ git push origin main
 Write-Host "--- STARTING BOT ---" -ForegroundColor Cyan
 $env:PYTHONPATH = "."
 
-# Запускаем так, чтобы процесс не обрывался
-python chvk_city/backend/main.py
+# Запуск FastAPI бота так, чтобы он не выключался
+uvicorn chvk_city.backend.main:app --host 0.0.0.0 --port 8000 --reload
