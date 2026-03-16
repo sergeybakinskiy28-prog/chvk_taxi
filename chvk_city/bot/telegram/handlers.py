@@ -281,6 +281,19 @@ async def _delete_messages(bot, chat_id: int, message_ids: list[int] | None):
             pass
 
 
+async def _remove_inline_keyboard(bot, chat_id: int, message_id: int) -> bool:
+    """Удаляет Inline-клавиатуру у сообщения. Возвращает True при успехе."""
+    try:
+        await bot.edit_message_reply_markup(
+            chat_id=chat_id,
+            message_id=message_id,
+            reply_markup=None,
+        )
+        return True
+    except Exception:
+        return False
+
+
 async def _get_recent_addresses(telegram_id: int, address_type: str) -> list[str]:
     """
     Возвращает до 3 уникальных недавних адресов пользователя:
@@ -600,13 +613,13 @@ async def cmd_start(message: Message, state: FSMContext):
         "Привет! Я помогу вам быстро заказать такси. Нажмите на кнопку ниже, чтобы начать.",
         reply_markup=keyboards.get_start_order_inline_keyboard(),
     )
-    helper = await message.answer(
-        "Дополнительные функции доступны в меню ниже.",
+    await message.answer(
+        "\u200b",  # Невидимый символ (без текста «Дополнительные функции...»)
         reply_markup=await _get_menu_for_user(message.from_user.id),
     )
     await state.update_data(
         last_menu_msg_id=welcome.message_id,
-        start_message_ids=[welcome.message_id, helper.message_id],
+        start_message_ids=[welcome.message_id],
     )
 
 @router.message(F.contact)
@@ -637,20 +650,12 @@ async def process_contact(message: Message, state: FSMContext):
 @router.message(F.text == "🚖 Заказать такси")
 @router.message(F.text == "🚕 Заказать такси")
 async def taxi_order_start(message: Message, state: FSMContext):
-    # Перед началом нового заказа сбрасываем старое состояние.
-    # Удаление старых сообщений отключено — история остаётся в чате.
-    # data = await state.get_data()
-    # last_menu_id = data.get("last_menu_msg_id")
-    # start_message_ids = data.get("start_message_ids", [])
-    # old_msg_ids = data.get("msg_to_delete", [])
+    # Редактируем приветствие: убираем Inline-клавиатуру
+    data = await state.get_data()
+    last_menu_id = data.get("last_menu_msg_id")
+    if isinstance(last_menu_id, int):
+        await _remove_inline_keyboard(message.bot, message.chat.id, last_menu_id)
     await state.clear()
-    # if isinstance(last_menu_id, int):
-    #     try:
-    #         await message.bot.delete_message(chat_id=message.chat.id, message_id=last_menu_id)
-    #     except Exception:
-    #         pass
-    # await _delete_messages(message.bot, message.chat.id, start_message_ids)
-    # await _delete_messages(message.bot, message.chat.id, old_msg_ids)
 
     await _begin_order_flow(
         message,
@@ -663,23 +668,11 @@ async def taxi_order_start(message: Message, state: FSMContext):
 @router.callback_query(F.data == "start_order_inline")
 async def start_order_inline_callback(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
-    # data = await state.get_data()
-    # start_message_ids = data.get("start_message_ids", [])
-    # old_msg_ids = list(data.get("msg_to_delete", []))
-    # cancel_msg_id = data.get("last_cancel_msg_id")
-    # if isinstance(cancel_msg_id, int) and cancel_msg_id not in old_msg_ids:
-    #     old_msg_ids.append(cancel_msg_id)
+    # Убираем Inline-клавиатуру у сообщения с приветствием
+    await _remove_inline_keyboard(
+        callback.bot, callback.message.chat.id, callback.message.message_id
+    )
     await state.clear()
-    # Удаление сообщений отключено — история остаётся в чате.
-    # try:
-    #     await callback.message.delete()
-    # except Exception:
-    #     try:
-    #         await callback.message.edit_reply_markup(reply_markup=None)
-    #     except Exception:
-    #         pass
-    # await _delete_messages(callback.bot, callback.message.chat.id, start_message_ids)
-    # await _delete_messages(callback.bot, callback.message.chat.id, old_msg_ids)
     await _begin_order_flow(
         callback.message,
         state,
@@ -1201,10 +1194,10 @@ async def owner_delete_driver_process_id(message: Message, state: FSMContext):
         )
         return
 
-    raw = message.text.strip()
-    if not raw.isdigit():
+    raw = (message.text or "").strip()
+    if not raw or not raw.isdigit():
         await message.answer(
-            "❌ Введите числовой ID (telegram_id).",
+            "⚠️ Ошибка: ID должен состоять только из цифр.",
             reply_markup=keyboards.get_admin_keyboard(),
         )
         return
@@ -1213,7 +1206,7 @@ async def owner_delete_driver_process_id(message: Message, state: FSMContext):
     try:
         resp = await get_http_client().get(f"/taxi/admin/driver/{tg_id}/confirm_info")
     except Exception as e:
-        logger.error(f"Failed to fetch driver confirm info: {e}")
+        logger.exception(f"Failed to fetch driver confirm info for tg_id={tg_id}: {e}")
         await state.clear()
         await message.answer(
             "❌ Не удалось получить данные водителя.",
@@ -1223,7 +1216,7 @@ async def owner_delete_driver_process_id(message: Message, state: FSMContext):
 
     if resp.status_code == 404:
         await message.answer(
-            "❌ Водитель с таким ID не найден.",
+            f"❌ Водитель с ID {tg_id} не найден в базе.",
             reply_markup=keyboards.get_admin_keyboard(),
         )
         return
@@ -1991,15 +1984,12 @@ async def complete_order_callback(callback: CallbackQuery, state: FSMContext):
                     p_state = _get_passenger_state(callback.bot, state.storage, client_chat_id)
                     p_data = await p_state.get_data()
                     msg_to_delete = p_data.get("msg_to_delete") or []
-                    if msg_to_delete:
-                        async def _delete_one(bot, chat_id, mid):
-                            try:
-                                await bot.delete_message(chat_id=chat_id, message_id=mid)
-                            except Exception:
-                                pass
-                        await asyncio.gather(
-                            *[_delete_one(callback.bot, client_chat_id, mid) for mid in msg_to_delete]
-                        )
+                    last_old_prompt_id = p_data.get("last_new_order_prompt_id")
+                    # Убираем кнопки у предыдущих сообщений цикла (не удаляем сами сообщения)
+                    for mid in msg_to_delete:
+                        await _remove_inline_keyboard(callback.bot, client_chat_id, mid)
+                    if isinstance(last_old_prompt_id, int):
+                        await _remove_inline_keyboard(callback.bot, client_chat_id, last_old_prompt_id)
 
                     ord_data = data
 
@@ -2220,6 +2210,7 @@ async def confirm_delete_driver_callback(callback: CallbackQuery):
         resp = await get_http_client().delete(f"/taxi/admin/driver/{tg_id}")
         if resp.status_code == 200:
             data = resp.json()
+            driver_name = data.get("name") or "—"
             try:
                 await callback.bot.send_message(
                     data["telegram_id"],
@@ -2228,14 +2219,18 @@ async def confirm_delete_driver_callback(callback: CallbackQuery):
             except Exception:
                 pass
             try:
-                await callback.message.edit_text("✅ Водитель успешно удален")
+                await callback.message.edit_text(
+                    f"✅ Водитель {driver_name} (ID: {tg_id}) успешно удален из системы"
+                )
             except Exception:
                 pass
             await callback.answer("Водитель удалён", show_alert=False)
+        elif resp.status_code == 404:
+            await callback.answer(f"❌ Водитель с ID {tg_id} не найден в базе.", show_alert=True)
         else:
             await callback.answer("Ошибка при удалении водителя", show_alert=True)
     except Exception as e:
-        logger.exception(f"Error in confirm_delete_driver_callback: {e}")
+        logger.exception(f"Error in confirm_delete_driver_callback (tg_id={tg_id}): {e}")
         await callback.answer("❌ Ошибка при удалении водителя", show_alert=True)
 
 
@@ -2655,29 +2650,13 @@ async def start_trip_callback(callback: CallbackQuery, state: FSMContext):
 async def start_new_order_callback(callback: CallbackQuery, state: FSMContext):
     """
     Клиент нажал '🚖 Заказать такси' после завершения заказа.
-    Удаление сообщений отключено — история остаётся в чате.
+    Убираем кнопку у сообщения «Нажмите кнопку ниже» (один заказ — одна кнопка).
     """
     await callback.answer()
-    # data = await state.get_data()
-    # old_msg_ids = list(data.get("msg_to_delete", []))
-    # for mid in (
-    #     data.get("last_new_order_prompt_id"),
-    #     data.get("last_cancel_msg_id"),
-    #     data.get("last_receipt_message_id"),
-    # ):
-    #     if isinstance(mid, int) and mid not in old_msg_ids:
-    #         old_msg_ids.append(mid)
+    await _remove_inline_keyboard(
+        callback.bot, callback.message.chat.id, callback.message.message_id
+    )
     await state.clear()
-
-    # Удаление сообщений отключено — история остаётся в чате.
-    # try:
-    #     await callback.message.delete()
-    # except Exception:
-    #     try:
-    #         await callback.message.edit_reply_markup(reply_markup=None)
-    #     except Exception:
-    #         pass
-    # await _delete_messages(callback.bot, callback.message.chat.id, old_msg_ids)
 
     # Сразу запускаем новый заказ
     try:

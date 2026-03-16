@@ -177,24 +177,17 @@ def get_client_after_accept_keyboard(order_id: int):
 
 def get_at_place_driver_keyboard(order_id: int, client_telegram_id: int | None = None):
     """
-    Клавиатура для водителя в статусе 'на месте':
-    Начать поездку | Написать/Позвонить клиенту | Отменить.
+    Клавиатура для водителя в статусе 'на месте' (ожидание клиента).
+    Только: Начать поездку | Написать клиенту | Отменить. Без звонка и маршрута.
     """
     buttons: list[list[InlineKeyboardButton]] = [
         [InlineKeyboardButton(text="🚀 Начать поездку", callback_data=f"start_trip_{order_id}")],
         [InlineKeyboardButton(text="❌ Отменить поездку", callback_data=f"driver_cancel_{order_id}")],
     ]
-    # Ряд «Написать» и «Позвонить» side-by-side
-    contact_row: list[InlineKeyboardButton] = []
     if client_telegram_id is not None:
-        contact_row.append(
+        buttons.insert(1, [
             InlineKeyboardButton(text="💬 Написать клиенту", url=f"tg://user?id={client_telegram_id}")
-        )
-    contact_row.append(
-        InlineKeyboardButton(text="📞 Позвонить клиенту", callback_data=f"driver_call_{order_id}")
-    )
-    if contact_row:
-        buttons.insert(1, contact_row)
+        ])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 

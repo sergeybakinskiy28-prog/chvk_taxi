@@ -239,11 +239,12 @@ async def admin_delete_driver(tg_id: int, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Водитель не найден")
 
     driver, user = row
+    driver_name = user.name or "—"
     success = await TaxiService.reject_driver(db, driver.id)
     if not success:
         raise HTTPException(status_code=400, detail="Не удалось удалить водителя")
 
-    return {"status": "deleted", "telegram_id": user.telegram_id}
+    return {"status": "deleted", "telegram_id": user.telegram_id, "name": driver_name}
 
 @router.post("/driver/register")
 async def register_driver(driver_data: DriverRegister, db: AsyncSession = Depends(get_db)):
