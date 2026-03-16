@@ -664,8 +664,11 @@ async def process_contact(message: Message, state: FSMContext):
         reply_markup=await _get_menu_for_user(message.from_user.id)
     )
 
-def _get_messages_to_clean(data: dict) -> list[int]:
-    """Собирает ID всех сообщений для удаления (приветствие, чек, кнопки заказа и т.д.)."""
+def _get_technical_messages_kill_list(data: dict) -> list[int]:
+    """
+    Kill list: только технический мусор для удаления.
+    НЕ включает карточки поездок («Итог заказа», «Заказ создан», «Водитель принял», «Поездка завершена»).
+    """
     ids: list[int] = []
     for key in ("last_menu_msg_id", "last_new_order_prompt_id"):
         mid = data.get(key)
@@ -674,32 +677,31 @@ def _get_messages_to_clean(data: dict) -> list[int]:
     for mid in data.get("start_message_ids") or []:
         if isinstance(mid, int) and mid not in ids:
             ids.append(mid)
-    for mid in data.get("messages_with_support") or []:
-        if isinstance(mid, int) and mid not in ids:
-            ids.append(mid)
-    for mid in data.get("msg_to_delete") or []:
-        if isinstance(mid, int) and mid not in ids:
-            ids.append(mid)
     return ids
+
+
+async def _delete_or_clear_buttons_safe(bot, chat_id: int, message_id: int):
+    """Удаляет сообщение. При ошибке API — очищает кнопки. try-except на каждый вызов."""
+    try:
+        await bot.delete_message(chat_id=chat_id, message_id=message_id)
+    except Exception:
+        try:
+            await bot.edit_message_reply_markup(
+                chat_id=chat_id,
+                message_id=message_id,
+                reply_markup=None,
+            )
+        except Exception:
+            pass
 
 
 @router.message(F.text == "🚖 Заказать такси")
 @router.message(F.text == "🚕 Заказать такси")
 async def taxi_order_start(message: Message, state: FSMContext):
-    # Удаляем ТОЛЬКО приветствие, чтобы не мешалось между блоками заказов. Чеки сохраняем.
+    # Kill list: приветствие, «Заказать такси» после поездки, «Дополнительные функции»
     data = await state.get_data()
-    last_menu_id = data.get("last_menu_msg_id")
-    if isinstance(last_menu_id, int):
-        try:
-            await message.bot.delete_message(chat_id=message.chat.id, message_id=last_menu_id)
-        except Exception:
-            pass
-    # Удаление остальных сообщений отключено — чат как лента поездок.
-    # for mid in _get_messages_to_clean(data):
-    #     try:
-    #         await message.bot.delete_message(chat_id=message.chat.id, message_id=mid)
-    #     except Exception:
-    #         await _remove_inline_keyboard(message.bot, message.chat.id, mid)
+    for mid in _get_technical_messages_kill_list(data):
+        await _delete_or_clear_buttons_safe(message.bot, message.chat.id, mid)
     await state.clear()
 
     await _begin_order_flow(
@@ -715,19 +717,12 @@ async def start_order_inline_callback(callback: CallbackQuery, state: FSMContext
     await callback.answer()
     chat_id = callback.message.chat.id
     data = await state.get_data()
-    # Удаляем ТОЛЬКО приветствие (если это оно)
-    last_menu_id = data.get("last_menu_msg_id")
-    if isinstance(last_menu_id, int):
-        try:
-            await callback.bot.delete_message(chat_id=chat_id, message_id=last_menu_id)
-        except Exception:
-            pass
-    # Убираем кнопку у сообщения, с которого нажали
+    for mid in _get_technical_messages_kill_list(data):
+        await _delete_or_clear_buttons_safe(callback.bot, chat_id, mid)
     try:
         await callback.message.edit_reply_markup(reply_markup=None)
     except Exception:
         pass
-    # Удаление остальных сообщений отключено — чат как лента поездок.
     await state.clear()
     await _begin_order_flow(
         callback.message,
@@ -2709,17 +2704,13 @@ async def start_trip_callback(callback: CallbackQuery, state: FSMContext):
 async def start_new_order_callback(callback: CallbackQuery, state: FSMContext):
     """
     Клиент нажал '🚖 Заказать такси' после завершения заказа.
-    Удаляем только приветствие (если есть). Чеки сохраняем — чат как лента поездок.
+    Kill list: приветствие, старый «Заказать такси», «Дополнительные функции». Карточки сохраняем.
     """
     await callback.answer()
     chat_id = callback.message.chat.id
     data = await state.get_data()
-    last_menu_id = data.get("last_menu_msg_id")
-    if isinstance(last_menu_id, int):
-        try:
-            await callback.bot.delete_message(chat_id=chat_id, message_id=last_menu_id)
-        except Exception:
-            pass
+    for mid in _get_technical_messages_kill_list(data):
+        await _delete_or_clear_buttons_safe(callback.bot, chat_id, mid)
     try:
         await callback.message.edit_reply_markup(reply_markup=None)
     except Exception:
