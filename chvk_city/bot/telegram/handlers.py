@@ -2552,19 +2552,23 @@ async def start_trip_callback(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "start_new_order")
 async def start_new_order_callback(callback: CallbackQuery, state: FSMContext):
     """
-    Клиент нажал '🚕 Заказать новое такси' после оценки.
-    Сбрасываем состояние и переводим к вводу адреса 'откуда',
-    не удаляя сообщение с оценкой из истории.
+    Клиент нажал '🚖 Заказать такси' после завершения заказа.
+    Удаляем сообщение с кнопкой, чек с оценкой и кнопкой поддержки,
+    затем запускаем ввод адреса.
     """
     await callback.answer()
     data = await state.get_data()
     old_msg_ids = list(data.get("msg_to_delete", []))
-    for mid in (data.get("last_new_order_prompt_id"), data.get("last_cancel_msg_id")):
+    for mid in (
+        data.get("last_new_order_prompt_id"),
+        data.get("last_cancel_msg_id"),
+        data.get("last_receipt_message_id"),
+    ):
         if isinstance(mid, int) and mid not in old_msg_ids:
             old_msg_ids.append(mid)
     await state.clear()
 
-    # Шаг 1: удаляем сообщение с кнопкой «Заказать такси», «Нажмите кнопку ниже», чек и прочий мусор
+    # Шаг 1: удаляем сообщение с кнопкой «Заказать такси», чек с оценкой и кнопкой поддержки
     try:
         await callback.message.delete()
     except Exception:

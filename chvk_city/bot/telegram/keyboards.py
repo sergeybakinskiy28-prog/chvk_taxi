@@ -282,9 +282,16 @@ def get_order_manage_keyboard(order_id: int):
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+def _support_url() -> str:
+    """URL кнопки «Поддержка»: t.me/ADMIN_USERNAME или t.me/telegram по умолчанию."""
+    admin_username = getattr(settings, "ADMIN_USERNAME", "") or ""
+    username = admin_username.strip().lstrip("@") if admin_username.strip() else "telegram"
+    return f"https://t.me/{username}"
+
+
 def get_rate_trip_keyboard(order_id: int):
     """
-    Клавиатура для оценки поездки клиентом (1–5 звёзд) + кнопка поддержки.
+    Клавиатура для оценки поездки клиентом (1–5 звёзд) + кнопка поддержки отдельным рядом.
     """
     buttons = [
         [
@@ -294,22 +301,15 @@ def get_rate_trip_keyboard(order_id: int):
             InlineKeyboardButton(text="⭐ 4", callback_data=f"rate_4_{order_id}"),
             InlineKeyboardButton(text="⭐ 5", callback_data=f"rate_5_{order_id}"),
         ],
+        [InlineKeyboardButton(text="💬 Поддержка", url=_support_url())],
     ]
-    admin_username = getattr(settings, "ADMIN_USERNAME", "") or ""
-    if admin_username.strip():
-        username = admin_username.strip().lstrip("@")
-        buttons.append([InlineKeyboardButton(text="💬 Поддержка", url=f"https://t.me/{username}")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def get_support_only_keyboard():
     """Клавиатура только с кнопкой «Поддержка» (для сообщений после оценки)."""
-    admin_username = getattr(settings, "ADMIN_USERNAME", "") or ""
-    if not admin_username.strip():
-        return None
-    username = admin_username.strip().lstrip("@")
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💬 Поддержка", url=f"https://t.me/{username}")],
+        [InlineKeyboardButton(text="💬 Поддержка", url=_support_url())],
     ])
 
 
