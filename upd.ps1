@@ -1,11 +1,18 @@
 param($msg = "update")
 
-# 1. Сохраняем и отправляем в облако
+# 1. Сохраняем и отправляем изменения
+Write-Host "--- Сохраняю код ---" -ForegroundColor Yellow
 git add .
 git commit -m $msg
 git push origin main
 
 # 2. Запуск бота
-# Мы попробуем запустить через модуль, так надежнее для твоей структуры
-python -m chvk_city.bot.telegram.main
-# Если не сработает, попробуй заменить строку выше на ту, которой ты обычно запускаешь.
+Write-Host "--- Запускаю бота ---" -ForegroundColor Cyan
+
+# Попробуем запустить через путь, который виден в твоем проекте
+if (Test-Path "chvk_city/bot/telegram/main.py") {
+    python chvk_city/bot/telegram/main.py
+}
+else {
+    python main.py
+}
