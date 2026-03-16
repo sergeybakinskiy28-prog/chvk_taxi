@@ -1691,7 +1691,7 @@ async def calculate_order_price_callback(callback: CallbackQuery, state: FSMCont
 async def confirm_order_creation_callback(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     try:
-        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.message.delete()
     except Exception:
         pass
     await finalize_order(callback.message, state, requester_telegram_id=callback.from_user.id)
