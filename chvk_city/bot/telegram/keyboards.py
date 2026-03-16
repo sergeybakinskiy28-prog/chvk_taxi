@@ -297,7 +297,7 @@ def get_new_order_after_rating_keyboard():
     Клавиатура с одной кнопкой для запуска нового заказа после оценки.
     """
     buttons = [
-        [InlineKeyboardButton(text="🚕 Заказать новое такси", callback_data="start_new_order")]
+        [InlineKeyboardButton(text="🚖 Заказать такси", callback_data="start_new_order")]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 

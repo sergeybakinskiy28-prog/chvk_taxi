@@ -1914,17 +1914,24 @@ async def complete_order_callback(callback: CallbackQuery, state: FSMContext):
 
                     # Отправляем "чистый чек" с инлайн-оценкой (звезды)
                     logger.info("Sending complete notification to passenger %s for order %s", client_chat_id, order_id)
-                    await callback.bot.send_message(
+                    receipt_msg = await callback.bot.send_message(
                         chat_id=client_chat_id,
                         text=receipt_text,
                         reply_markup=keyboards.get_rate_trip_keyboard(order_id),
                     )
 
-                    # Сразу следом показываем inline‑кнопку "🚕 Заказать новое такси"
-                    await callback.bot.send_message(
+                    # Сразу следом показываем inline‑кнопку заказа для новой сессии
+                    new_order_prompt = await callback.bot.send_message(
                         chat_id=client_chat_id,
-                        text="🚕 Нажмите кнопку ниже, чтобы заказать новое такси:",
+                        text="🚖 Нажмите кнопку ниже, чтобы заказать такси:",
                         reply_markup=keyboards.get_new_order_after_rating_keyboard(),
+                    )
+                    to_del = p_data.get("msg_to_delete", [])
+                    to_del.append(new_order_prompt.message_id)
+                    await p_state.update_data(
+                        msg_to_delete=to_del,
+                        last_receipt_message_id=receipt_msg.message_id,
+                        last_new_order_prompt_id=new_order_prompt.message_id,
                     )
                 except Exception as e:
                     logger.exception(f"Error sending 'trip completed' (receipt) message to client {client_chat_id}: {e}")
@@ -2509,18 +2516,22 @@ async def start_new_order_callback(callback: CallbackQuery, state: FSMContext):
     не удаляя сообщение с оценкой из истории.
     """
     await callback.answer()
-    # Сбрасываем предыдущее состояние
+    data = await state.get_data()
+    old_msg_ids = data.get("msg_to_delete", [])
     await state.clear()
 
     # Шаг 1: убираем кнопку "Заказать новое такси" у старого сообщения, текст с оценкой не трогаем
     try:
-        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.message.delete()
     except Exception:
-        pass
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+    await _delete_messages(callback.bot, callback.message.chat.id, old_msg_ids)
 
-    # Шаг 2: помечаем новый заказ и показываем recent/manual адреса отправления
+    # Шаг 2: сразу запускаем новый заказ без лишних промежуточных сообщений
     try:
-        await callback.message.answer("Отлично! Начинаем новый заказ. 🚕")
         await _begin_order_flow(callback.message, state, callback.from_user.id)
     except Exception as e:
         logger.exception(f"Error sending new order prompt: {e}")
