@@ -175,6 +175,18 @@ def get_client_after_accept_keyboard(order_id: int, driver_telegram_id: int | No
     ])
 
 
+def get_client_in_progress_keyboard(order_id: int, driver_telegram_id: int | None = None):
+    """
+    Верхний блок в статусе «В пути»: 💬 Поддержка (сверху) + 💬 Написать водителю.
+    """
+    buttons: list[list] = [
+        [InlineKeyboardButton(text="💬 Поддержка", url=_support_url())],
+    ]
+    if driver_telegram_id is not None:
+        buttons.append([InlineKeyboardButton(text="💬 Написать водителю", url=f"tg://user?id={driver_telegram_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
 def get_at_place_driver_keyboard(order_id: int, client_telegram_id: int | None = None):
     """
     Клавиатура для водителя в статусе 'на месте' (ожидание клиента).
@@ -309,7 +321,8 @@ def _support_url() -> str:
 
 def get_rate_trip_keyboard(order_id: int):
     """
-    Клавиатура для оценки поездки клиентом (1–5 звёзд) + кнопка поддержки отдельным рядом.
+    Клавиатура для оценки поездки клиентом (только звёзды).
+    После оценки — финальная плашка с одной кнопкой 💬 Поддержка.
     """
     buttons = [
         [
@@ -319,7 +332,6 @@ def get_rate_trip_keyboard(order_id: int):
             InlineKeyboardButton(text="⭐ 4", callback_data=f"rate_4_{order_id}"),
             InlineKeyboardButton(text="⭐ 5", callback_data=f"rate_5_{order_id}"),
         ],
-        [InlineKeyboardButton(text="💬 Поддержка", url=_support_url())],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
