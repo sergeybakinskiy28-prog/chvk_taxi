@@ -473,6 +473,33 @@ async def _show_order_options_screen(target_message: Message, state: FSMContext)
     await state.set_state(OrderTaxi.waiting_for_options)
 
 
+async def _begin_order_flow(
+    target_message: Message,
+    state: FSMContext,
+    user_id: int,
+    trigger_message_id: int | None = None,
+):
+    msg_list: list[int] = []
+    if isinstance(trigger_message_id, int):
+        msg_list.append(trigger_message_id)
+
+    await state.update_data(
+        msg_to_delete=msg_list,
+        order_started_by_button=True,
+        requester_telegram_id=user_id,
+        destination_addresses=[],
+        from_address=None,
+        to_address=None,
+        has_child_seat=False,
+        has_pet=False,
+        order_comment=None,
+        calculated_price=None,
+        is_processing=False,
+        order_id=None,
+    )
+    await _prompt_for_from_address(target_message, state, user_id)
+
+
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
     """
@@ -500,9 +527,13 @@ async def cmd_start(message: Message, state: FSMContext):
 
     welcome = await message.answer(
         "Привет! Я помогу вам быстро заказать такси. Нажмите на кнопку ниже, чтобы начать.",
-        reply_markup=await _get_menu_for_user(message.from_user.id),
+        reply_markup=keyboards.get_start_order_inline_keyboard(),
     )
     await state.update_data(last_menu_msg_id=welcome.message_id)
+    await message.answer(
+        "Дополнительные функции доступны в меню ниже.",
+        reply_markup=await _get_menu_for_user(message.from_user.id),
+    )
 
 @router.message(F.contact)
 async def process_contact(message: Message, state: FSMContext):
@@ -542,25 +573,30 @@ async def taxi_order_start(message: Message, state: FSMContext):
         except Exception:
             pass
 
-    # Начинаем новый список сообщений для удаления
-    msg_list: list[int] = []
-    # Сохраняем само нажатие "🚕 Заказать такси" (сообщение пользователя)
-    msg_list.append(message.message_id)
-
-    await state.update_data(
-        msg_to_delete=msg_list,
-        order_started_by_button=True,
-        requester_telegram_id=message.from_user.id,
-        destination_addresses=[],
-        from_address=None,
-        to_address=None,
-        has_child_seat=False,
-        has_pet=False,
-        order_comment=None,
-        calculated_price=None,
-        is_processing=False,
+    await _begin_order_flow(
+        message,
+        state,
+        message.from_user.id,
+        trigger_message_id=message.message_id,
     )
-    await _prompt_for_from_address(message, state, message.from_user.id)
+
+
+@router.callback_query(F.data == "start_order_inline")
+async def start_order_inline_callback(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await state.clear()
+    try:
+        await callback.message.delete()
+    except Exception:
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+    await _begin_order_flow(
+        callback.message,
+        state,
+        callback.from_user.id,
+    )
 
 
 @router.message(F.text == "🗂 Мои заказы")
@@ -2439,22 +2475,9 @@ async def start_new_order_callback(callback: CallbackQuery, state: FSMContext):
         pass
 
     # Шаг 2: помечаем новый заказ и показываем recent/manual адреса отправления
-    await state.update_data(
-        order_started_by_button=True,
-        requester_telegram_id=callback.from_user.id,
-        is_processing=False,
-        msg_to_delete=[],
-        destination_addresses=[],
-        from_address=None,
-        to_address=None,
-        has_child_seat=False,
-        has_pet=False,
-        order_comment=None,
-        calculated_price=None,
-    )
     try:
         await callback.message.answer("Отлично! Начинаем новый заказ. 🚕")
-        await _prompt_for_from_address(callback.message, state, callback.from_user.id)
+        await _begin_order_flow(callback.message, state, callback.from_user.id)
     except Exception as e:
         logger.exception(f"Error sending new order prompt: {e}")
         await callback.answer("Произошла ошибка, попробуйте ещё раз.", show_alert=True)
