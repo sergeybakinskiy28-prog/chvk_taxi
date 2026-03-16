@@ -2559,14 +2559,12 @@ async def start_new_order_callback(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     data = await state.get_data()
     old_msg_ids = list(data.get("msg_to_delete", []))
-    prompt_id = data.get("last_new_order_prompt_id")
-    cancel_id = data.get("last_cancel_msg_id")
-    for mid in (prompt_id, cancel_id):
+    for mid in (data.get("last_new_order_prompt_id"), data.get("last_cancel_msg_id")):
         if isinstance(mid, int) and mid not in old_msg_ids:
             old_msg_ids.append(mid)
     await state.clear()
 
-    # Шаг 1: удаляем сообщение «Нажмите кнопку ниже» и все связанные системные сообщения
+    # Шаг 1: удаляем сообщение с кнопкой «Заказать такси», «Нажмите кнопку ниже», чек и прочий мусор
     try:
         await callback.message.delete()
     except Exception:
@@ -2622,38 +2620,8 @@ async def rate_trip_callback(callback: CallbackQuery):
     except Exception as e:
         logger.exception(f"Error in rate_trip_callback: {e}")
 
-    # Дополнительно уведомляем водителя об оценке
-    try:
-        # Берём свежие данные заказа только для того, чтобы узнать driver_telegram_id
-        response = await get_http_client().get(f"/taxi/order/{order_id}")
-        if response.status_code == 200:
-            order = response.json()
-            driver_chat_id = order.get("driver_telegram_id")
-            if driver_chat_id:
-                try:
-                    me = await callback.bot.get_me()
-                    if driver_chat_id == me.id:
-                        logger.warning(
-                            "Попытка отправить уведомление об оценке самому боту (driver_telegram_id=%s).",
-                            driver_chat_id,
-                        )
-                    else:
-                        rating_int = int(rating_str) if rating_str.isdigit() else None
-                        extra = ""
-                        if rating_int is not None and rating_int <= 2:
-                            extra = "\n💬 Оценка влияет на ваш рейтинг. Старайтесь быть вежливее!"
-
-                        await callback.bot.send_message(
-                            chat_id=driver_chat_id,
-                            text=(
-                                f"⭐ Клиент поставил вам оценку {rating_str}/5 за заказ #{order_id}!"
-                                f"{extra}"
-                            ),
-                        )
-                except Exception as e:
-                    logger.exception(f"Error sending rating notification to driver {driver_chat_id}: {e}")
-    except Exception as e:
-        logger.exception(f"Error fetching order for rating notification: {e}")
+    # Оценка анонимна: водитель НЕ получает уведомление о конкретной оценке.
+    # Оценка отображается только клиенту в сообщении выше.
 
 # Блокируем любой текст на этапах опций и подтверждения заказа.
 # Исключение: комментарий принимается только в состоянии waiting_for_comment.
