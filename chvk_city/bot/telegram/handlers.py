@@ -1976,16 +1976,16 @@ async def eta_select_callback(callback: CallbackQuery, state: FSMContext):
                         except Exception:
                             pass
                     if not edited:
-                        sent_msg = await callback.bot.send_message(
-                            client_chat_id,
-                            text,
-                            reply_markup=keyboards.get_client_after_accept_keyboard(order_id, driver_tg_id),
-                        )
                         if isinstance(active_id, int):
                             try:
                                 await callback.bot.delete_message(chat_id=client_chat_id, message_id=active_id)
                             except Exception:
                                 pass
+                        sent_msg = await callback.bot.send_message(
+                            client_chat_id,
+                            text,
+                            reply_markup=keyboards.get_client_after_accept_keyboard(order_id, driver_tg_id),
+                        )
                         await p_state.update_data(
                             active_message_id=sent_msg.message_id,
                             msg_to_delete=[sent_msg.message_id],
@@ -2092,16 +2092,16 @@ async def complete_order_callback(callback: CallbackQuery, state: FSMContext):
                         except Exception:
                             pass
                     if not edited:
-                        receipt_msg = await callback.bot.send_message(
-                            chat_id=client_chat_id,
-                            text=receipt_text,
-                            reply_markup=keyboards.get_rate_trip_keyboard(order_id),
-                        )
                         if isinstance(active_id, int):
                             try:
                                 await callback.bot.delete_message(chat_id=client_chat_id, message_id=active_id)
                             except Exception:
                                 pass
+                        receipt_msg = await callback.bot.send_message(
+                            chat_id=client_chat_id,
+                            text=receipt_text,
+                            reply_markup=keyboards.get_rate_trip_keyboard(order_id),
+                        )
                         active_id = receipt_msg.message_id
 
                     logger.info("Sending complete notification to passenger %s for order %s", client_chat_id, order_id)
@@ -2369,7 +2369,7 @@ async def at_place_callback(callback: CallbackQuery, state: FSMContext):
         if response.status_code == 200:
             order = response.json()
             client_chat_id = order["client_telegram_id"]
-            driver_phone = order.get("driver_phone")
+            driver_telegram_id = order.get("driver_telegram_id") or callback.from_user.id
             # Уведомляем клиента, с защитой от попытки писать боту
             try:
                 me = await callback.bot.get_me()
@@ -2394,7 +2394,7 @@ async def at_place_callback(callback: CallbackQuery, state: FSMContext):
                                 chat_id=client_chat_id,
                                 message_id=active_id,
                                 text=text,
-                                reply_markup=keyboards.get_client_at_place_keyboard(order_id, driver_phone),
+                                reply_markup=keyboards.get_client_at_place_keyboard(order_id, driver_telegram_id),
                             )
                             edited = True
                             await p_state.update_data(
@@ -2404,16 +2404,16 @@ async def at_place_callback(callback: CallbackQuery, state: FSMContext):
                         except Exception:
                             pass
                     if not edited:
-                        sent = await callback.bot.send_message(
-                            client_chat_id,
-                            text,
-                            reply_markup=keyboards.get_client_at_place_keyboard(order_id, driver_phone),
-                        )
                         if isinstance(active_id, int):
                             try:
                                 await callback.bot.delete_message(chat_id=client_chat_id, message_id=active_id)
                             except Exception:
                                 pass
+                        sent = await callback.bot.send_message(
+                            client_chat_id,
+                            text,
+                            reply_markup=keyboards.get_client_at_place_keyboard(order_id, driver_telegram_id),
+                        )
                         await p_state.update_data(
                             active_message_id=sent.message_id,
                             msg_to_delete=[sent.message_id],
@@ -2717,15 +2717,15 @@ async def start_trip_callback(callback: CallbackQuery, state: FSMContext):
                         except Exception:
                             pass
                     if not edited:
-                        sent = await callback.bot.send_message(
-                            client_chat_id,
-                            "🚀 Поехали! Приятного пути.",
-                        )
                         if isinstance(active_id, int):
                             try:
                                 await callback.bot.delete_message(chat_id=client_chat_id, message_id=active_id)
                             except Exception:
                                 pass
+                        sent = await callback.bot.send_message(
+                            client_chat_id,
+                            "🚀 Поехали! Приятного пути.",
+                        )
                         await p_state.update_data(
                             active_message_id=sent.message_id,
                             msg_to_delete=[sent.message_id],

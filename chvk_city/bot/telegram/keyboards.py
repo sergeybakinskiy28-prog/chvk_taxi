@@ -341,14 +341,16 @@ def get_new_order_after_rating_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def get_client_at_place_keyboard(order_id: int, driver_phone: str | None):
+def get_client_at_place_keyboard(order_id: int, driver_telegram_id: int | None = None):
     """
     Клавиатура для клиента, когда водитель на месте.
-    Только «Выхожу!» — связь и поддержка в главном блоке заказа выше.
+    Только: 🏃 Выхожу! и 💬 Написать водителю (без Позвонить и Поддержка).
     """
     buttons: list[list[InlineKeyboardButton]] = [
         [InlineKeyboardButton(text="🏃 Выхожу!", callback_data=f"client_out_{order_id}")],
     ]
+    if driver_telegram_id is not None:
+        buttons.append([InlineKeyboardButton(text="💬 Написать водителю", url=f"tg://user?id={driver_telegram_id}")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
