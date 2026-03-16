@@ -1473,8 +1473,9 @@ async def finish_route_callback(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Сначала добавьте хотя бы один адрес назначения.", show_alert=True)
         return
     await callback.answer()
+    # Удаляем сообщение с кнопкой «Далее», чтобы не засорять чат
     try:
-        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.message.delete()
     except Exception:
         pass
     await state.update_data(
@@ -1582,17 +1583,22 @@ async def confirm_order_creation_callback(callback: CallbackQuery, state: FSMCon
     await finalize_order(callback.message, state, requester_telegram_id=callback.from_user.id)
 
 
+@router.callback_query(F.data == "cancel_order_creation", OrderTaxi.waiting_for_options)
 @router.callback_query(F.data == "cancel_order_creation", OrderTaxi.waiting_for_confirmation)
 async def cancel_order_creation_callback(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     await state.clear()
+    # Удаляем сообщение с итогом/опциями, чтобы очистить чат
     try:
-        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.message.delete()
     except Exception:
-        pass
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
     await callback.message.answer(
-        "❌ Заказ отменен",
-        reply_markup=await _get_menu_for_user(callback.from_user.id),
+        "Заказ отменен. Вы можете начать новый заказ в любое время.",
+        reply_markup=keyboards.get_start_order_inline_keyboard(),
     )
 
 
@@ -2517,10 +2523,13 @@ async def start_new_order_callback(callback: CallbackQuery, state: FSMContext):
     """
     await callback.answer()
     data = await state.get_data()
-    old_msg_ids = data.get("msg_to_delete", [])
+    old_msg_ids = list(data.get("msg_to_delete", []))
+    prompt_id = data.get("last_new_order_prompt_id")
+    if isinstance(prompt_id, int) and prompt_id not in old_msg_ids:
+        old_msg_ids.append(prompt_id)
     await state.clear()
 
-    # Шаг 1: убираем кнопку "Заказать новое такси" у старого сообщения, текст с оценкой не трогаем
+    # Шаг 1: удаляем сообщение «Нажмите кнопку ниже» и все связанные системные сообщения
     try:
         await callback.message.delete()
     except Exception:
