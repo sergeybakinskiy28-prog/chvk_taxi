@@ -577,6 +577,7 @@ async def get_order(order_id: int, db: AsyncSession = Depends(get_db)):
     return {
         "id": order.id,
         "client_telegram_id": user.telegram_id,
+        "client_phone": user.phone,
         "driver_telegram_id": driver_telegram_id,
         "driver_phone": driver_phone,
         "driver_name": driver_name,

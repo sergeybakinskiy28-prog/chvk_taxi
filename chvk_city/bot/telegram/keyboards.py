@@ -128,21 +128,14 @@ def get_accept_order_keyboard(order_id: int):
 
 
 def get_eta_select_keyboard(order_id: int):
-    """Клавиатура выбора времени прибытия к клиенту (в минутах)."""
+    """Клавиатура выбора интервала времени прибытия к клиенту."""
     buttons = [
-        [
-            InlineKeyboardButton(text="1 мин", callback_data=f"eta_1_{order_id}"),
-            InlineKeyboardButton(text="3 мин", callback_data=f"eta_3_{order_id}"),
-            InlineKeyboardButton(text="5 мин", callback_data=f"eta_5_{order_id}"),
-        ],
-        [
-            InlineKeyboardButton(text="7 мин", callback_data=f"eta_7_{order_id}"),
-            InlineKeyboardButton(text="10 мин", callback_data=f"eta_10_{order_id}"),
-        ],
-        [
-            InlineKeyboardButton(text="15 мин", callback_data=f"eta_15_{order_id}"),
-            InlineKeyboardButton(text="20 мин", callback_data=f"eta_20_{order_id}"),
-        ],
+        [InlineKeyboardButton(text="🕒 1–3 мин", callback_data=f"eta_1-3_{order_id}")],
+        [InlineKeyboardButton(text="🕒 4–6 мин", callback_data=f"eta_4-6_{order_id}")],
+        [InlineKeyboardButton(text="🕒 7–10 мин", callback_data=f"eta_7-10_{order_id}")],
+        [InlineKeyboardButton(text="🕒 11–15 мин", callback_data=f"eta_11-15_{order_id}")],
+        [InlineKeyboardButton(text="🕒 16–20 мин", callback_data=f"eta_16-20_{order_id}")],
+        [InlineKeyboardButton(text="🕒 20–30 мин", callback_data=f"eta_20-30_{order_id}")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -174,10 +167,11 @@ def get_post_accept_driver_keyboard(order_id: int):
 def get_client_after_accept_keyboard(order_id: int):
     """
     Клавиатура для клиента сразу после принятия заказа водителем:
-    только кнопка связи.
+    кнопка связи и поддержка.
     """
     buttons: list[list[InlineKeyboardButton]] = [
-        [InlineKeyboardButton(text="📞 Связаться", callback_data=f"client_call_{order_id}")]
+        [InlineKeyboardButton(text="📞 Связаться", callback_data=f"client_call_{order_id}")],
+        [InlineKeyboardButton(text="💬 Поддержка", url=_support_url())],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -229,12 +223,13 @@ def get_driver_districts_keyboard():
     )
 
 
-def get_driver_accept_keyboard(order_id: int, from_address: str) -> InlineKeyboardMarkup:
+def get_driver_accept_keyboard(order_id: int, from_address: str, client_phone: str | None = None) -> InlineKeyboardMarkup:
     """
     Клавиатура для водителя сразу после принятия заказа:
     - навигация к клиенту
+    - связь с клиентом (если есть телефон)
     - кнопка 'Я на месте'
-    - (опционально) отмена
+    - отмена
     """
     from_url = _yandex_route(from_address)
     buttons = [
@@ -242,6 +237,8 @@ def get_driver_accept_keyboard(order_id: int, from_address: str) -> InlineKeyboa
         [InlineKeyboardButton(text="📍 Я на месте", callback_data=f"at_place_{order_id}")],
         [InlineKeyboardButton(text="❌ Отменить поездку", callback_data=f"driver_cancel_{order_id}")],
     ]
+    if client_phone:
+        buttons.insert(1, [InlineKeyboardButton(text="📞 Позвонить клиенту", callback_data=f"driver_call_{order_id}")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def get_admin_approval_keyboard(driver_id: int):

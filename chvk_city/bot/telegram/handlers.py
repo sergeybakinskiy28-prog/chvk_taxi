@@ -247,6 +247,19 @@ def _is_valid_phone(phone: str) -> bool:
     return 10 <= len(digits) <= 12
 
 
+def _eta_key_to_display(eta_key: str) -> str:
+    """Преобразует ключ интервала (1-3, 4-6) в текст для пассажира (1–3 мин)."""
+    mapping = {
+        "1-3": "1–3 мин",
+        "4-6": "4–6 мин",
+        "7-10": "7–10 мин",
+        "11-15": "11–15 мин",
+        "16-20": "16–20 мин",
+        "20-30": "20–30 мин",
+    }
+    return mapping.get(eta_key, eta_key + " мин")
+
+
 def _get_passenger_state(bot, storage, user_id):
     key = StorageKey(
         bot_id=bot.id,
@@ -1825,10 +1838,11 @@ async def eta_select_callback(callback: CallbackQuery, state: FSMContext):
     Второй шаг: водитель выбрал время прибытия.
     Вызываем API accept, отправляем данные водителю и пассажиру.
     """
-    # callback.data: eta_{minutes}_{order_id}
-    parts = callback.data.split("_")
-    minutes = int(parts[1])
+    # callback.data: eta_{interval}_{order_id}, например eta_1-3_123
+    parts = callback.data.split("_", 2)
+    eta_key = parts[1]  # "1-3", "4-6", "7-10" и т.д.
     order_id = int(parts[2])
+    eta_display = _eta_key_to_display(eta_key)
     driver_telegram_id = callback.from_user.id
 
     try:
@@ -1868,6 +1882,7 @@ async def eta_select_callback(callback: CallbackQuery, state: FSMContext):
                     reply_markup=keyboards.get_driver_accept_keyboard(
                         order_id,
                         order["from_address"],
+                        order.get("client_phone"),
                     ),
                 )
             except Exception as e:
@@ -1886,8 +1901,8 @@ async def eta_select_callback(callback: CallbackQuery, state: FSMContext):
                     route_text = _format_route_from_values(from_addr, to_addr)
                     driver_name = callback.from_user.full_name or "Водитель"
                     text = (
-                        f"🚕 Водитель {driver_name} принял ваш заказ!\n"
-                        f"Он будет у вас примерно через {minutes} мин.\n\n"
+                        f"🚖 Водитель {driver_name} принял ваш заказ!\n"
+                        f"Он будет у вас в течение {eta_display}.\n\n"
                         f"{route_text}\n\n"
                         f"🚗 Машина: {order.get('car_model', '—')}\n"
                         f"🔢 Номер: {order.get('car_number', '—')}\n\n"
@@ -2435,6 +2450,42 @@ async def client_call_callback(callback: CallbackQuery):
     except Exception as e:
         logger.exception(f"Error in client_call_callback: {e}")
         await callback.answer("Ошибка при попытке получить номер водителя.", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("driver_call_"))
+async def driver_call_callback(callback: CallbackQuery):
+    """
+    Водитель нажал '📞 Позвонить клиенту'.
+    Отправляем контакт клиента водителю.
+    """
+    order_id = int(callback.data.split("_")[-1])
+    try:
+        response = await get_http_client().get(f"/taxi/order/{order_id}")
+        if response.status_code == 200:
+            order = response.json()
+            client_phone = order.get("client_phone")
+            if client_phone:
+                try:
+                    await callback.bot.send_contact(
+                        chat_id=callback.from_user.id,
+                        phone_number=client_phone,
+                        first_name="Клиент",
+                    )
+                except Exception as e:
+                    logger.exception(f"Error sending client contact: {e}")
+                    await callback.bot.send_message(
+                        callback.from_user.id,
+                        f"📞 Телефон клиента: {client_phone}",
+                    )
+                await callback.answer()
+            else:
+                await callback.answer("Номер телефона клиента не указан.", show_alert=True)
+        else:
+            await callback.answer("Не удалось получить данные заказа.", show_alert=True)
+    except Exception as e:
+        logger.exception(f"Error in driver_call_callback: {e}")
+        await callback.answer("Ошибка при попытке получить номер клиента.", show_alert=True)
+
 
 @router.callback_query(F.data.startswith("driver_cancel_"))
 async def driver_cancel_callback(callback: CallbackQuery):
