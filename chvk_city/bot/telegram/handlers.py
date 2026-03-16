@@ -65,12 +65,16 @@ async def process_from_address(message: Message, state: FSMContext):
         await message.answer("Пожалуйста, напишите адрес отправления текстом.")
         return
     data = await state.get_data()
-    msg_list = data.get("msg_to_delete", [])
-    msg_list.append(message.message_id)
+    prev_msg_ids = data.get("msg_to_delete", [])
     await state.update_data(
-        msg_to_delete=msg_list,
         from_address=from_address,
     )
+    try:
+        await message.delete()
+    except Exception:
+        pass
+    await _delete_messages(message.bot, message.chat.id, prev_msg_ids)
+    await state.update_data(msg_to_delete=[])
     print(f"DEBUG ORDER: saved from_address='{from_address}' for user {message.from_user.id}", flush=True)
     await _prompt_for_to_address(message, state, message.from_user.id)
 
@@ -104,9 +108,13 @@ async def process_to_address(message: Message, state: FSMContext):
         await message.answer("Пожалуйста, напишите адрес назначения текстом.")
         return
     data = await state.get_data()
-    msg_list = data.get("msg_to_delete", [])
-    msg_list.append(message.message_id)
-    await state.update_data(msg_to_delete=msg_list)
+    prev_msg_ids = data.get("msg_to_delete", [])
+    try:
+        await message.delete()
+    except Exception:
+        pass
+    await _delete_messages(message.bot, message.chat.id, prev_msg_ids)
+    await state.update_data(msg_to_delete=[])
     await _save_destination_and_show_options(message, state, to_address, message.from_user.id)
 
 
@@ -240,6 +248,18 @@ def _get_passenger_state(bot, storage, user_id):
     return FSMContext(storage=storage, key=key)
 
 
+async def _delete_messages(bot, chat_id: int, message_ids: list[int] | None):
+    if not message_ids:
+        return
+    for mid in message_ids:
+        if not isinstance(mid, int):
+            continue
+        try:
+            await bot.delete_message(chat_id=chat_id, message_id=mid)
+        except Exception:
+            pass
+
+
 async def _get_recent_addresses(telegram_id: int, address_type: str) -> list[str]:
     """
     Возвращает до 3 уникальных недавних адресов пользователя:
@@ -353,6 +373,8 @@ async def _save_destination_and_show_options(target_message: Message, state: FSM
         destination_addresses=destination_addresses,
         to_address="\n".join(destination_addresses),
     )
+    await _delete_messages(target_message.bot, target_message.chat.id, msg_list)
+    msg_list = []
     print(
         f"DEBUG ORDER: destination added='{address}', route={destination_addresses}, user={user_id}",
         flush=True,
@@ -460,6 +482,7 @@ async def _show_order_options_screen(target_message: Message, state: FSMContext)
     has_pet = bool(data.get("has_pet"))
     order_comment = data.get("order_comment")
 
+    await _delete_messages(target_message.bot, target_message.chat.id, data.get("msg_to_delete", []))
     sent = await target_message.answer(
         _build_order_options_text(from_address, destination_addresses, order_comment),
         reply_markup=keyboards.get_order_options_keyboard(
@@ -467,7 +490,7 @@ async def _show_order_options_screen(target_message: Message, state: FSMContext)
             has_pet=has_pet,
         ),
     )
-    msg_list = data.get("msg_to_delete", [])
+    msg_list: list[int] = []
     msg_list.append(sent.message_id)
     await state.update_data(msg_to_delete=msg_list)
     await state.set_state(OrderTaxi.waiting_for_options)
@@ -529,10 +552,13 @@ async def cmd_start(message: Message, state: FSMContext):
         "Привет! Я помогу вам быстро заказать такси. Нажмите на кнопку ниже, чтобы начать.",
         reply_markup=keyboards.get_start_order_inline_keyboard(),
     )
-    await state.update_data(last_menu_msg_id=welcome.message_id)
-    await message.answer(
+    helper = await message.answer(
         "Дополнительные функции доступны в меню ниже.",
         reply_markup=await _get_menu_for_user(message.from_user.id),
+    )
+    await state.update_data(
+        last_menu_msg_id=welcome.message_id,
+        start_message_ids=[welcome.message_id, helper.message_id],
     )
 
 @router.message(F.contact)
@@ -566,12 +592,16 @@ async def taxi_order_start(message: Message, state: FSMContext):
     # Перед началом нового заказа сбрасываем старое состояние и пытаемся удалить прошлое меню
     data = await state.get_data()
     last_menu_id = data.get("last_menu_msg_id")
+    start_message_ids = data.get("start_message_ids", [])
+    old_msg_ids = data.get("msg_to_delete", [])
     await state.clear()
     if isinstance(last_menu_id, int):
         try:
             await message.bot.delete_message(chat_id=message.chat.id, message_id=last_menu_id)
         except Exception:
             pass
+    await _delete_messages(message.bot, message.chat.id, start_message_ids)
+    await _delete_messages(message.bot, message.chat.id, old_msg_ids)
 
     await _begin_order_flow(
         message,
@@ -584,6 +614,9 @@ async def taxi_order_start(message: Message, state: FSMContext):
 @router.callback_query(F.data == "start_order_inline")
 async def start_order_inline_callback(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
+    data = await state.get_data()
+    start_message_ids = data.get("start_message_ids", [])
+    old_msg_ids = data.get("msg_to_delete", [])
     await state.clear()
     try:
         await callback.message.delete()
@@ -592,6 +625,8 @@ async def start_order_inline_callback(callback: CallbackQuery, state: FSMContext
             await callback.message.edit_reply_markup(reply_markup=None)
         except Exception:
             pass
+    await _delete_messages(callback.bot, callback.message.chat.id, start_message_ids)
+    await _delete_messages(callback.bot, callback.message.chat.id, old_msg_ids)
     await _begin_order_flow(
         callback.message,
         state,
@@ -1384,6 +1419,8 @@ async def recent_from_callback(callback: CallbackQuery, state: FSMContext):
         from_address=from_address,
     )
     print(f"DEBUG ORDER: selected recent from_address='{from_address}' for user {callback.from_user.id}", flush=True)
+    await _delete_messages(callback.bot, callback.message.chat.id, msg_list)
+    await state.update_data(msg_to_delete=[])
     await _prompt_for_to_address(callback.message, state, callback.from_user.id)
 
 
@@ -1403,7 +1440,8 @@ async def recent_to_callback(callback: CallbackQuery, state: FSMContext):
         pass
     msg_list = data.get("msg_to_delete", [])
     msg_list.append(callback.message.message_id)
-    await state.update_data(msg_to_delete=msg_list)
+    await _delete_messages(callback.bot, callback.message.chat.id, msg_list)
+    await state.update_data(msg_to_delete=[])
     await _save_destination_and_show_options(callback.message, state, to_address, callback.from_user.id)
 
 
@@ -1414,6 +1452,9 @@ async def add_more_address_callback(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_reply_markup(reply_markup=None)
     except Exception:
         pass
+    data = await state.get_data()
+    await _delete_messages(callback.bot, callback.message.chat.id, data.get("msg_to_delete", []))
+    await state.update_data(msg_to_delete=[])
     sent = await callback.message.answer(
         "Напишите следующий адрес назначения:",
         reply_markup=ReplyKeyboardRemove(),
@@ -1515,16 +1556,19 @@ async def calculate_order_price_callback(callback: CallbackQuery, state: FSMCont
     calculated_price = _estimate_order_price(data)
     await state.update_data(calculated_price=calculated_price)
     await callback.answer()
+    summary_message_id = callback.message.message_id
     try:
         await callback.message.edit_text(
             _build_final_summary_text({**data, "calculated_price": calculated_price}),
             reply_markup=keyboards.get_order_confirmation_keyboard(),
         )
     except Exception:
-        await callback.message.answer(
+        sent = await callback.message.answer(
             _build_final_summary_text({**data, "calculated_price": calculated_price}),
             reply_markup=keyboards.get_order_confirmation_keyboard(),
         )
+        summary_message_id = sent.message_id
+    await state.update_data(msg_to_delete=[summary_message_id])
     await state.set_state(OrderTaxi.waiting_for_confirmation)
 
 
