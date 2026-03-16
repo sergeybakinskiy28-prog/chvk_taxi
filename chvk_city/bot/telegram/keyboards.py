@@ -167,10 +167,11 @@ def get_post_accept_driver_keyboard(order_id: int):
 def get_client_after_accept_keyboard(order_id: int):
     """
     Клавиатура для клиента сразу после принятия заказа водителем:
-    только кнопка связи (поддержка — только после завершения поездки).
+    связь с водителем и поддержка (сопровождает пассажира на всех этапах).
     """
     buttons: list[list[InlineKeyboardButton]] = [
         [InlineKeyboardButton(text="📞 Связаться", callback_data=f"client_call_{order_id}")],
+        [InlineKeyboardButton(text="💬 Поддержка", url=_support_url())],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -345,11 +346,13 @@ def get_client_at_place_keyboard(order_id: int, driver_phone: str | None):
     """
     Клавиатура для клиента, когда водитель на месте.
     - '🏃 Выхожу!' — уведомление водителю
-    - '📱 Позвонить' — присылаем номер водителя текстом отдельным сообщением
+    - '📱 Позвонить' — связь с водителем
+    - '💬 Поддержка' — на всех этапах
     """
     buttons: list[list[InlineKeyboardButton]] = [
         [InlineKeyboardButton(text="🏃 Выхожу!", callback_data=f"client_out_{order_id}")],
         [InlineKeyboardButton(text="📱 Позвонить", callback_data=f"client_call_{order_id}")],
+        [InlineKeyboardButton(text="💬 Поддержка", url=_support_url())],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -357,10 +360,11 @@ def get_client_at_place_keyboard(order_id: int, driver_phone: str | None):
 def get_client_after_out_keyboard(order_id: int):
     """
     Клавиатура для клиента после нажатия '🏃 Выхожу!':
-    оставляем только кнопку связи.
+    связь с водителем и поддержка.
     """
     buttons: list[list[InlineKeyboardButton]] = [
-        [InlineKeyboardButton(text="📱 Позвонить", callback_data=f"client_call_{order_id}")]
+        [InlineKeyboardButton(text="📱 Позвонить", callback_data=f"client_call_{order_id}")],
+        [InlineKeyboardButton(text="💬 Поддержка", url=_support_url())],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 def get_phone_keyboard():

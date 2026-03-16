@@ -647,14 +647,26 @@ async def process_contact(message: Message, state: FSMContext):
         reply_markup=await _get_menu_for_user(message.from_user.id)
     )
 
+def _get_order_button_msg_ids(data: dict) -> list[int]:
+    """Собирает ID сообщений с кнопкой «Заказать такси» и поддержкой для очистки."""
+    ids: list[int] = []
+    for key in ("last_menu_msg_id", "last_new_order_prompt_id"):
+        mid = data.get(key)
+        if isinstance(mid, int) and mid not in ids:
+            ids.append(mid)
+    for mid in data.get("messages_with_support") or []:
+        if isinstance(mid, int) and mid not in ids:
+            ids.append(mid)
+    return ids
+
+
 @router.message(F.text == "🚖 Заказать такси")
 @router.message(F.text == "🚕 Заказать такси")
 async def taxi_order_start(message: Message, state: FSMContext):
-    # Редактируем приветствие: убираем Inline-клавиатуру
+    # Гарантированно убираем Inline-клавиатуру у приветствия и «Заказать такси» после поездки
     data = await state.get_data()
-    last_menu_id = data.get("last_menu_msg_id")
-    if isinstance(last_menu_id, int):
-        await _remove_inline_keyboard(message.bot, message.chat.id, last_menu_id)
+    for mid in _get_order_button_msg_ids(data):
+        await _remove_inline_keyboard(message.bot, message.chat.id, mid)
     await state.clear()
 
     await _begin_order_flow(
@@ -668,10 +680,11 @@ async def taxi_order_start(message: Message, state: FSMContext):
 @router.callback_query(F.data == "start_order_inline")
 async def start_order_inline_callback(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
-    # Убираем Inline-клавиатуру у сообщения с приветствием
-    await _remove_inline_keyboard(
-        callback.bot, callback.message.chat.id, callback.message.message_id
-    )
+    chat_id = callback.message.chat.id
+    data = await state.get_data()
+    for mid in _get_order_button_msg_ids(data):
+        await _remove_inline_keyboard(callback.bot, chat_id, mid)
+    await _remove_inline_keyboard(callback.bot, chat_id, callback.message.message_id)
     await state.clear()
     await _begin_order_flow(
         callback.message,
@@ -2027,10 +2040,13 @@ async def complete_order_callback(callback: CallbackQuery, state: FSMContext):
                     )
                     to_del = p_data.get("msg_to_delete", [])
                     to_del.append(new_order_prompt.message_id)
+                    msgs_support = p_data.get("messages_with_support") or []
+                    msgs_support.append(receipt_msg.message_id)
                     await p_state.update_data(
                         msg_to_delete=to_del,
                         last_receipt_message_id=receipt_msg.message_id,
                         last_new_order_prompt_id=new_order_prompt.message_id,
+                        messages_with_support=msgs_support,
                     )
                 except Exception as e:
                     logger.exception(f"Error sending 'trip completed' (receipt) message to client {client_chat_id}: {e}")
@@ -2620,6 +2636,7 @@ async def start_trip_callback(callback: CallbackQuery, state: FSMContext):
                     sent = await callback.bot.send_message(
                         client_chat_id,
                         "🚀 Поехали! Приятного пути.",
+                        reply_markup=keyboards.get_support_only_keyboard(),
                     )
                     # Добавить новое сообщение пассажиру в список msg_to_delete
                     to_del = p_data.get("msg_to_delete", [])
@@ -2650,12 +2667,14 @@ async def start_trip_callback(callback: CallbackQuery, state: FSMContext):
 async def start_new_order_callback(callback: CallbackQuery, state: FSMContext):
     """
     Клиент нажал '🚖 Заказать такси' после завершения заказа.
-    Убираем кнопку у сообщения «Нажмите кнопку ниже» (один заказ — одна кнопка).
+    Убираем все предыдущие кнопки (заказ, поддержка под чеками).
     """
     await callback.answer()
-    await _remove_inline_keyboard(
-        callback.bot, callback.message.chat.id, callback.message.message_id
-    )
+    chat_id = callback.message.chat.id
+    data = await state.get_data()
+    for mid in _get_order_button_msg_ids(data):
+        await _remove_inline_keyboard(callback.bot, chat_id, mid)
+    await _remove_inline_keyboard(callback.bot, chat_id, callback.message.message_id)
     await state.clear()
 
     # Сразу запускаем новый заказ
