@@ -49,6 +49,7 @@ class OwnerDeleteDriver(StatesGroup):
 async def process_from_address(message: Message, state: FSMContext):
     # Игнорируем нажатия кнопок меню — ждём текстовый адрес
     if message.text in {
+        "🚖 Заказать такси",
         "🚕 Заказать такси",
         "🗂 Мои заказы",
         "📞 Поддержка",
@@ -80,13 +81,14 @@ async def process_to_address(message: Message, state: FSMContext):
     if not data.get("from_address"):
         await state.clear()
         await message.answer(
-            "Сессия сброшена. Нажмите «🚕 Заказать такси» для нового заказа.",
+            "Сессия сброшена. Нажмите «🚖 Заказать такси» для нового заказа.",
             reply_markup=await _get_menu_for_user(message.from_user.id),
         )
         return
 
     # Игнорируем нажатия кнопок меню — ждём текстовый адрес
     if message.text in {
+        "🚖 Заказать такси",
         "🚕 Заказать такси",
         "🗂 Мои заказы",
         "📞 Поддержка",
@@ -114,13 +116,14 @@ async def process_comment(message: Message, state: FSMContext):
     if not data.get("from_address") or not data.get("destination_addresses"):
         await state.clear()
         await message.answer(
-            "Сессия сброшена. Нажмите «🚕 Заказать такси» для нового заказа.",
+            "Сессия сброшена. Нажмите «🚖 Заказать такси» для нового заказа.",
             reply_markup=await _get_menu_for_user(message.from_user.id),
         )
         return
 
     # Игнорируем нажатия кнопок меню — ждём комментарий или текст
     if message.text in {
+        "🚖 Заказать такси",
         "🚕 Заказать такси",
         "🗂 Мои заказы",
         "📞 Поддержка",
@@ -472,43 +475,15 @@ async def _show_order_options_screen(target_message: Message, state: FSMContext)
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
     """
-    Стартовая команда:
-    - если пользователь уже есть в БД и у него есть телефон — сразу показываем главное меню;
-    - иначе регистрируем (при необходимости) и просим отправить контакт.
+    Универсальная точка входа:
+    - сбрасывает текущее состояние;
+    - регистрирует пользователя при необходимости;
+    - всегда показывает главное меню с кнопкой заказа.
     """
     await state.clear()
 
     user_id = message.from_user.id
 
-    try:
-        resp = await get_http_client().get(f"/taxi/user/{user_id}")
-        if resp.status_code == 200:
-            user_data = resp.json()
-            if user_data.get("phone"):
-                is_driver, has_pending = await _get_driver_flags(user_id)
-                if has_pending:
-                    await message.answer(
-                        "🕓 Ваша заявка на водителя находится на рассмотрении.\n"
-                        "Пожалуйста, дождитесь ответа администратора.",
-                        reply_markup=await _get_menu_for_user(message.from_user.id),
-                    )
-                    return
-                # Телефон уже есть — приветствие и главное меню (без перехода в состояние адреса)
-                await message.answer(
-                    "Здравствуйте! Рады видеть вас в сервисе CHVK City 🚕\n\n"
-                    "Здесь вы можете быстро заказать такси, посмотреть историю своих поездок или связаться с поддержкой.\n\n"
-                    "Для заказа нажмите кнопку ниже 👇",
-                    reply_markup=await _get_menu_for_user(message.from_user.id),
-                )
-                return
-        # Если 404 или нет телефона — продолжаем обычный флоу
-    except Exception as e:
-        logger.error(f"Failed to fetch user {user_id}: {e}")
-        print(f"[API] get user {user_id}: {e}", flush=True)
-        await message.answer("An error occurred. Please try again later.")
-        return
-
-    # Регистрируем пользователя (если его ещё нет)
     try:
         await get_http_client().post(
             "/taxi/user/register",
@@ -520,14 +495,13 @@ async def cmd_start(message: Message, state: FSMContext):
     except Exception as e:
         logger.error(f"Failed to register user {user_id}: {e}")
         print(f"[API] register user: {e}", flush=True)
-        await message.answer("An error occurred. Please try again later.")
-        return
-    
-    await message.answer(
-        "Здравствуйте! Рады видеть вас в сервисе CHVK City 🚕\n\n"
-        "Для безопасности и связи водителя с вами подтвердите, пожалуйста, номер телефона, нажав кнопку ниже. 👇",
-        reply_markup=keyboards.get_phone_keyboard(),
+        # Не прерываем /start: главное меню всё равно должно показываться
+
+    welcome = await message.answer(
+        "Привет! Я помогу вам быстро заказать такси. Нажмите на кнопку ниже, чтобы начать.",
+        reply_markup=await _get_menu_for_user(message.from_user.id),
     )
+    await state.update_data(last_menu_msg_id=welcome.message_id)
 
 @router.message(F.contact)
 async def process_contact(message: Message, state: FSMContext):
@@ -554,6 +528,7 @@ async def process_contact(message: Message, state: FSMContext):
         reply_markup=await _get_menu_for_user(message.from_user.id)
     )
 
+@router.message(F.text == "🚖 Заказать такси")
 @router.message(F.text == "🚕 Заказать такси")
 async def taxi_order_start(message: Message, state: FSMContext):
     # Перед началом нового заказа сбрасываем старое состояние и пытаемся удалить прошлое меню
@@ -739,7 +714,7 @@ async def _start_driver_registration(message: Message, state: FSMContext):
 
 @router.message(DriverRegistration.waiting_for_full_name, F.text)
 async def driver_reg_full_name(message: Message, state: FSMContext):
-    if message.text in {"🚕 Заказать такси", "🗂 Мои заказы", "📞 Поддержка", "🚗 Стать водителем", "💎 УПРАВЛЕНИЕ"}:
+    if message.text in {"🚕 Заказать такси", "🚖 Заказать такси", "🗂 Мои заказы", "📞 Поддержка", "🚗 Стать водителем", "💎 УПРАВЛЕНИЕ"}:
         await state.clear()
         await message.answer("Регистрация отменена.", reply_markup=await _get_menu_for_user(message.from_user.id))
         return
@@ -757,7 +732,7 @@ async def driver_reg_full_name(message: Message, state: FSMContext):
 
 @router.message(DriverRegistration.waiting_for_car_info, F.text)
 async def driver_reg_car_info(message: Message, state: FSMContext):
-    if message.text in {"🚕 Заказать такси", "🗂 Мои заказы", "📞 Поддержка", "🚗 Стать водителем", "💎 УПРАВЛЕНИЕ"}:
+    if message.text in {"🚕 Заказать такси", "🚖 Заказать такси", "🗂 Мои заказы", "📞 Поддержка", "🚗 Стать водителем", "💎 УПРАВЛЕНИЕ"}:
         await state.clear()
         await message.answer("Регистрация отменена.", reply_markup=await _get_menu_for_user(message.from_user.id))
         return
