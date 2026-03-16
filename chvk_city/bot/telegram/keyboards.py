@@ -167,24 +167,34 @@ def get_post_accept_driver_keyboard(order_id: int):
 def get_client_after_accept_keyboard(order_id: int):
     """
     Клавиатура для клиента сразу после принятия заказа водителем:
-    кнопка связи и поддержка.
+    только кнопка связи (поддержка — только после завершения поездки).
     """
     buttons: list[list[InlineKeyboardButton]] = [
         [InlineKeyboardButton(text="📞 Связаться", callback_data=f"client_call_{order_id}")],
-        [InlineKeyboardButton(text="💬 Поддержка", url=_support_url())],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def get_at_place_driver_keyboard(order_id: int):
+def get_at_place_driver_keyboard(order_id: int, client_telegram_id: int | None = None):
     """
     Клавиатура для водителя в статусе 'на месте':
-    только управление — без навигации.
+    Начать поездку | Написать/Позвонить клиенту | Отменить.
     """
-    buttons = [
-        [InlineKeyboardButton(text="▶️ Начать поездку", callback_data=f"start_trip_{order_id}")],
+    buttons: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton(text="🚀 Начать поездку", callback_data=f"start_trip_{order_id}")],
         [InlineKeyboardButton(text="❌ Отменить поездку", callback_data=f"driver_cancel_{order_id}")],
     ]
+    # Ряд «Написать» и «Позвонить» side-by-side
+    contact_row: list[InlineKeyboardButton] = []
+    if client_telegram_id is not None:
+        contact_row.append(
+            InlineKeyboardButton(text="💬 Написать клиенту", url=f"tg://user?id={client_telegram_id}")
+        )
+    contact_row.append(
+        InlineKeyboardButton(text="📞 Позвонить клиенту", callback_data=f"driver_call_{order_id}")
+    )
+    if contact_row:
+        buttons.insert(1, contact_row)
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -225,20 +235,18 @@ def get_driver_districts_keyboard():
 
 def get_driver_accept_keyboard(order_id: int, from_address: str, client_phone: str | None = None) -> InlineKeyboardMarkup:
     """
-    Клавиатура для водителя сразу после принятия заказа:
-    - навигация к клиенту
-    - связь с клиентом (если есть телефон)
-    - кнопка 'Я на месте'
-    - отмена
+    Клавиатура для водителя сразу после принятия заказа.
+    Порядок сверху вниз: Маршрут → Я на месте → Позвонить клиенту → Отменить.
+    Каждая кнопка — отдельная строка для удобства нажатия во время движения.
     """
     from_url = _yandex_route(from_address)
-    buttons = [
+    buttons: list[list[InlineKeyboardButton]] = [
         [InlineKeyboardButton(text="📍 Маршрут к клиенту", url=from_url)],
-        [InlineKeyboardButton(text="📍 Я на месте", callback_data=f"at_place_{order_id}")],
+        [InlineKeyboardButton(text="✅ Я на месте", callback_data=f"at_place_{order_id}")],
         [InlineKeyboardButton(text="❌ Отменить поездку", callback_data=f"driver_cancel_{order_id}")],
     ]
     if client_phone:
-        buttons.insert(1, [InlineKeyboardButton(text="📞 Позвонить клиенту", callback_data=f"driver_call_{order_id}")])
+        buttons.insert(2, [InlineKeyboardButton(text="📞 Позвонить клиенту", callback_data=f"driver_call_{order_id}")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def get_admin_approval_keyboard(driver_id: int):

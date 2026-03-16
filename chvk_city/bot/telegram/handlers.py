@@ -333,7 +333,7 @@ async def _prompt_for_from_address(target_message: Message, state: FSMContext, t
     msg_list = data.get("msg_to_delete", [])
 
     sent = await target_message.answer(
-        "🗺️ Откуда вас забрать?\nВыберите из списка ниже или введите новый:",
+        "📍 Откуда вас забрать?\nВыберите из списка ниже или введите новый:",
         reply_markup=_build_recent_addresses_keyboard(recent_addresses, "from"),
     )
     msg_list.append(sent.message_id)
@@ -637,19 +637,20 @@ async def process_contact(message: Message, state: FSMContext):
 @router.message(F.text == "🚖 Заказать такси")
 @router.message(F.text == "🚕 Заказать такси")
 async def taxi_order_start(message: Message, state: FSMContext):
-    # Перед началом нового заказа сбрасываем старое состояние и пытаемся удалить прошлое меню
-    data = await state.get_data()
-    last_menu_id = data.get("last_menu_msg_id")
-    start_message_ids = data.get("start_message_ids", [])
-    old_msg_ids = data.get("msg_to_delete", [])
+    # Перед началом нового заказа сбрасываем старое состояние.
+    # Удаление старых сообщений отключено — история остаётся в чате.
+    # data = await state.get_data()
+    # last_menu_id = data.get("last_menu_msg_id")
+    # start_message_ids = data.get("start_message_ids", [])
+    # old_msg_ids = data.get("msg_to_delete", [])
     await state.clear()
-    if isinstance(last_menu_id, int):
-        try:
-            await message.bot.delete_message(chat_id=message.chat.id, message_id=last_menu_id)
-        except Exception:
-            pass
-    await _delete_messages(message.bot, message.chat.id, start_message_ids)
-    await _delete_messages(message.bot, message.chat.id, old_msg_ids)
+    # if isinstance(last_menu_id, int):
+    #     try:
+    #         await message.bot.delete_message(chat_id=message.chat.id, message_id=last_menu_id)
+    #     except Exception:
+    #         pass
+    # await _delete_messages(message.bot, message.chat.id, start_message_ids)
+    # await _delete_messages(message.bot, message.chat.id, old_msg_ids)
 
     await _begin_order_flow(
         message,
@@ -662,22 +663,23 @@ async def taxi_order_start(message: Message, state: FSMContext):
 @router.callback_query(F.data == "start_order_inline")
 async def start_order_inline_callback(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
-    data = await state.get_data()
-    start_message_ids = data.get("start_message_ids", [])
-    old_msg_ids = list(data.get("msg_to_delete", []))
-    cancel_msg_id = data.get("last_cancel_msg_id")
-    if isinstance(cancel_msg_id, int) and cancel_msg_id not in old_msg_ids:
-        old_msg_ids.append(cancel_msg_id)
+    # data = await state.get_data()
+    # start_message_ids = data.get("start_message_ids", [])
+    # old_msg_ids = list(data.get("msg_to_delete", []))
+    # cancel_msg_id = data.get("last_cancel_msg_id")
+    # if isinstance(cancel_msg_id, int) and cancel_msg_id not in old_msg_ids:
+    #     old_msg_ids.append(cancel_msg_id)
     await state.clear()
-    try:
-        await callback.message.delete()
-    except Exception:
-        try:
-            await callback.message.edit_reply_markup(reply_markup=None)
-        except Exception:
-            pass
-    await _delete_messages(callback.bot, callback.message.chat.id, start_message_ids)
-    await _delete_messages(callback.bot, callback.message.chat.id, old_msg_ids)
+    # Удаление сообщений отключено — история остаётся в чате.
+    # try:
+    #     await callback.message.delete()
+    # except Exception:
+    #     try:
+    #         await callback.message.edit_reply_markup(reply_markup=None)
+    #     except Exception:
+    #         pass
+    # await _delete_messages(callback.bot, callback.message.chat.id, start_message_ids)
+    # await _delete_messages(callback.bot, callback.message.chat.id, old_msg_ids)
     await _begin_order_flow(
         callback.message,
         state,
@@ -2298,10 +2300,8 @@ async def at_place_callback(callback: CallbackQuery, state: FSMContext):
                     )
                 else:
                     # Сообщение без номера, номер отдаём через отдельную кнопку 'Позвонить'
-                    route_text = _format_route_from_values(order.get("from_address"), order.get("to_address"))
                     text = (
-                        "🚕 Такси подъехало! Выходите к машине.\n\n"
-                        f"{route_text}"
+                        "🚖 Водитель ожидает вас по адресу! Пожалуйста, выходите."
                     )
                     if client_chat_id == me.id:
                         logger.warning("Ошибка: попытка отправить сообщение боту")
@@ -2329,7 +2329,7 @@ async def at_place_callback(callback: CallbackQuery, state: FSMContext):
                 await callback.message.edit_text(
                     f"🚕 Вы на месте по заказу #{order_id}.\n\n"
                     "Ожидаем клиента. Нажмите 'Начать поездку', когда он сядет в машину.",
-                    reply_markup=keyboards.get_at_place_driver_keyboard(order_id),
+                    reply_markup=keyboards.get_at_place_driver_keyboard(order_id, client_chat_id),
                 )
             except Exception:
                 pass
@@ -2655,32 +2655,31 @@ async def start_trip_callback(callback: CallbackQuery, state: FSMContext):
 async def start_new_order_callback(callback: CallbackQuery, state: FSMContext):
     """
     Клиент нажал '🚖 Заказать такси' после завершения заказа.
-    Удаляем сообщение с кнопкой, чек с оценкой и кнопкой поддержки,
-    затем запускаем ввод адреса.
+    Удаление сообщений отключено — история остаётся в чате.
     """
     await callback.answer()
-    data = await state.get_data()
-    old_msg_ids = list(data.get("msg_to_delete", []))
-    for mid in (
-        data.get("last_new_order_prompt_id"),
-        data.get("last_cancel_msg_id"),
-        data.get("last_receipt_message_id"),
-    ):
-        if isinstance(mid, int) and mid not in old_msg_ids:
-            old_msg_ids.append(mid)
+    # data = await state.get_data()
+    # old_msg_ids = list(data.get("msg_to_delete", []))
+    # for mid in (
+    #     data.get("last_new_order_prompt_id"),
+    #     data.get("last_cancel_msg_id"),
+    #     data.get("last_receipt_message_id"),
+    # ):
+    #     if isinstance(mid, int) and mid not in old_msg_ids:
+    #         old_msg_ids.append(mid)
     await state.clear()
 
-    # Шаг 1: удаляем сообщение с кнопкой «Заказать такси», чек с оценкой и кнопкой поддержки
-    try:
-        await callback.message.delete()
-    except Exception:
-        try:
-            await callback.message.edit_reply_markup(reply_markup=None)
-        except Exception:
-            pass
-    await _delete_messages(callback.bot, callback.message.chat.id, old_msg_ids)
+    # Удаление сообщений отключено — история остаётся в чате.
+    # try:
+    #     await callback.message.delete()
+    # except Exception:
+    #     try:
+    #         await callback.message.edit_reply_markup(reply_markup=None)
+    #     except Exception:
+    #         pass
+    # await _delete_messages(callback.bot, callback.message.chat.id, old_msg_ids)
 
-    # Шаг 2: сразу запускаем новый заказ без лишних промежуточных сообщений
+    # Сразу запускаем новый заказ
     try:
         await _begin_order_flow(callback.message, state, callback.from_user.id)
     except Exception as e:
