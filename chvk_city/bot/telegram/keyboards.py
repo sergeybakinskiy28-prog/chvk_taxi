@@ -11,6 +11,7 @@ def get_user_menu(show_become_driver: bool = True, is_owner: bool = False) -> Re
     show_become_driver: показывать кнопку «Стать водителем» (скрыть после подачи заявки).
     """
     buttons = [
+        [KeyboardButton(text="🚖 Заказать такси")],
         [KeyboardButton(text="🗂 Мои заказы")],
         [KeyboardButton(text="📞 Поддержка")],
     ]
@@ -31,6 +32,7 @@ def get_driver_main_menu(is_owner: bool = False) -> ReplyKeyboardMarkup:
     Главное меню водителя: те же кнопки + «Кабинет водителя» вместо «Стать водителем».
     """
     buttons = [
+        [KeyboardButton(text="🚖 Заказать такси")],
         [KeyboardButton(text="🗂 Мои заказы")],
         [KeyboardButton(text="📞 Поддержка")],
         [KeyboardButton(text="💼 Кабинет водителя")],

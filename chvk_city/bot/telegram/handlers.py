@@ -54,6 +54,12 @@ class OwnerDeleteDriver(StatesGroup):
 
 @router.message(OrderTaxi.waiting_for_from_address, F.text)
 async def process_from_address(message: Message, state: FSMContext):
+    # Перехватываем /start: сбрасываем состояние и уходим в главное меню
+    if message.text == "/start":
+        await state.clear()
+        await cmd_start(message, state)
+        return
+
     # Игнорируем нажатия кнопок меню — ждём текстовый адрес
     if message.text in {
         "🚖 Заказать такси",
@@ -615,13 +621,26 @@ async def cmd_start(message: Message, state: FSMContext):
     except Exception:
         pass
 
-    # Единое окно: удаляем предыдущее сообщение бота
+    # Собираем все ID старых сообщений для удаления до очистки стейта
     data = await state.get_data()
-    _prev_bot_msg_id = data.get("last_bot_msg_id")
+    _ids_to_purge: list[int] = []
+    for _key in ("last_bot_msg_id", "last_menu_msg_id", "notification_id", "last_new_order_prompt_id"):
+        _mid = data.get(_key)
+        if isinstance(_mid, int) and _mid not in _ids_to_purge:
+            _ids_to_purge.append(_mid)
+    for _mid in (data.get("start_message_ids") or []):
+        if isinstance(_mid, int) and _mid not in _ids_to_purge:
+            _ids_to_purge.append(_mid)
+    for _mid in (data.get("messages_to_delete") or []):
+        if isinstance(_mid, int) and _mid not in _ids_to_purge:
+            _ids_to_purge.append(_mid)
+    for _mid in (data.get("msg_to_delete") or []):
+        if isinstance(_mid, int) and _mid not in _ids_to_purge:
+            _ids_to_purge.append(_mid)
     await state.clear()
-    if isinstance(_prev_bot_msg_id, int):
+    for _mid in _ids_to_purge:
         try:
-            await message.bot.delete_message(chat_id=message.chat.id, message_id=_prev_bot_msg_id)
+            await message.bot.delete_message(chat_id=message.chat.id, message_id=_mid)
         except Exception:
             pass
 
@@ -2913,7 +2932,7 @@ async def start_new_order_callback(callback: CallbackQuery, state: FSMContext):
         return
 
 @router.callback_query(F.data.startswith("rate_"))
-async def rate_trip_callback(callback: CallbackQuery):
+async def rate_trip_callback(callback: CallbackQuery, state: FSMContext):
     """
     Обработка оценки поездки.
     callback.data имеет вид 'rate_{оценка}_{order_id}'.
@@ -2958,6 +2977,17 @@ async def rate_trip_callback(callback: CallbackQuery):
     except Exception as e:
         logger.exception(f"Error in rate_trip_callback: {e}")
     await callback.answer("Спасибо за оценку!")
+
+    # Восстанавливаем главное меню с постоянной кнопкой «🚖 Заказать такси»
+    try:
+        menu_kb = await _get_menu_for_user(callback.from_user.id)
+        await state.clear()
+        await callback.message.answer(
+            "Нажмите кнопку ниже, чтобы заказать такси снова.",
+            reply_markup=menu_kb,
+        )
+    except Exception as e:
+        logger.error(f"Failed to send menu after rating for {callback.from_user.id}: {e}")
 
     # Оценка анонимна: водитель НЕ получает уведомление о конкретной оценке.
     # Оценка отображается только клиенту в сообщении выше.
