@@ -764,6 +764,21 @@ async def _send_single_window(
 async def taxi_order_start(message: Message, state: FSMContext):
     data = await state.get_data()
     messages_to_delete = data.get("messages_to_delete", [])
+
+    # Удаляем сообщение пользователя (нажатие текстовой кнопки)
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+    # Удаляем приветственное сообщение бота
+    last_bot_msg_id = data.get("last_bot_msg_id")
+    if isinstance(last_bot_msg_id, int):
+        try:
+            await message.bot.delete_message(chat_id=message.chat.id, message_id=last_bot_msg_id)
+        except Exception:
+            pass
+
     for mid in _get_technical_messages_kill_list(data):
         await _delete_or_clear_buttons_safe(message.bot, message.chat.id, mid)
     await state.clear()
