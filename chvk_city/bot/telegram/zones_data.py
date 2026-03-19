@@ -314,13 +314,29 @@ def get_zone_by_coords(lon: float, lat: float) -> str | None:
     Возвращает название зоны или None.
     """
     if not _ZONE_POLYGONS:
+        print("[GEO] get_zone_by_coords: полигоны не загружены", flush=True)
         return None
     try:
         from shapely.geometry import Point as _Point
-        pt = _Point(lon, lat)
+        pt_normal  = _Point(lon, lat)   # стандартный порядок GeoJSON: x=lon, y=lat
+        pt_swapped = _Point(lat, lon)   # тест: вдруг Яндекс путает порядок
+
+        zone_normal  = None
+        zone_swapped = None
         for zone_name, polygon in _ZONE_POLYGONS:
-            if polygon.contains(pt):
-                return zone_name
+            if zone_normal  is None and polygon.contains(pt_normal):
+                zone_normal = zone_name
+            if zone_swapped is None and polygon.contains(pt_swapped):
+                zone_swapped = zone_name
+            if zone_normal and zone_swapped:
+                break
+
+        print(
+            f"[GEO] Coords: lon={lon:.5f}, lat={lat:.5f} | "
+            f"Zone(normal)={zone_normal!r} | Zone(swapped)={zone_swapped!r}",
+            flush=True,
+        )
+        return zone_normal
     except Exception as e:
         print(f"[GEO] Ошибка point-in-polygon: {e}", flush=True)
     return None

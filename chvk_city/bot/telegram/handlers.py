@@ -16,6 +16,7 @@ from chvk_city.bot.telegram import keyboards
 from chvk_city.bot.telegram.constants import OWNER_ID
 from chvk_city.bot.telegram.zones_data import (
     get_zone_by_address,
+    get_zone_by_address_geocoded,
     get_zone_price,
     get_ride_minutes,
     DEFAULT_ZONE_PRICE,
@@ -80,16 +81,15 @@ async def process_from_address(message: Message, state: FSMContext):
         return
     data = await state.get_data()
     prev_msg_ids = data.get("msg_to_delete", [])
-    await state.update_data(
-        from_address=from_address,
-    )
+    from_zone = await get_zone_by_address_geocoded(from_address)
+    await state.update_data(from_address=from_address, from_zone=from_zone)
     try:
         await message.delete()
     except Exception:
         pass
     await _delete_messages(message.bot, message.chat.id, prev_msg_ids)
     await state.update_data(msg_to_delete=[])
-    print(f"DEBUG ORDER: saved from_address='{from_address}' for user {message.from_user.id}", flush=True)
+    print(f"DEBUG ORDER: saved from_address='{from_address}', from_zone={from_zone!r} for user {message.from_user.id}", flush=True)
     await _prompt_for_to_address(message, state, message.from_user.id)
 
 
@@ -126,6 +126,10 @@ async def process_to_address(message: Message, state: FSMContext):
     data = await state.get_data()
     prev_msg_ids = data.get("msg_to_delete", [])
     edit_id = data.get("route_message_id") or (prev_msg_ids[-1] if prev_msg_ids else None)
+    to_zone = await get_zone_by_address_geocoded(to_address)
+    if not data.get("destination_addresses"):
+        await state.update_data(to_zone=to_zone)
+    print(f"DEBUG ORDER: to_address='{to_address}', to_zone={to_zone!r} for user {message.from_user.id}", flush=True)
     try:
         await message.delete()
     except Exception:
@@ -506,8 +510,8 @@ def _estimate_order_price(data: dict) -> tuple[float, str | None]:
     destination_addresses = data.get("destination_addresses") or []
     first_to = destination_addresses[0] if destination_addresses else ""
 
-    from_zone = get_zone_by_address(from_address)
-    to_zone = get_zone_by_address(first_to)
+    from_zone = data.get("from_zone") or get_zone_by_address(from_address)
+    to_zone   = data.get("to_zone")   or get_zone_by_address(first_to)
     zone_price, recognized = get_zone_price(from_zone, to_zone)
 
     if recognized:
