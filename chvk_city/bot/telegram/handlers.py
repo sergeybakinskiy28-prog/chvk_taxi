@@ -666,15 +666,11 @@ async def cmd_start(message: Message, state: FSMContext):
             "Привет! Я помогу вам быстро заказать такси. Нажмите на кнопку ниже, чтобы начать.",
             reply_markup=keyboards.get_start_order_inline_keyboard(),
         )
-        menu_msg = await message.answer(
-            "\u200b",
-            reply_markup=await _get_menu_for_user(message.from_user.id),
-        )
         await state.update_data(
             last_bot_msg_id=welcome.message_id,
             last_menu_msg_id=welcome.message_id,
-            start_message_ids=[welcome.message_id, menu_msg.message_id],
-            messages_to_delete=[welcome.message_id, menu_msg.message_id],
+            start_message_ids=[welcome.message_id],
+            messages_to_delete=[welcome.message_id],
         )
     except Exception as e:
         logger.error(f"Failed to send welcome to {user_id}: {e}", exc_info=True)
@@ -714,6 +710,18 @@ async def add_to_messages_to_delete(state: FSMContext, message_id: int):
     if message_id not in lst:
         lst.append(message_id)
     await state.update_data(messages_to_delete=lst)
+
+
+async def perform_cleanup(bot, chat_id: int, state: FSMContext):
+    """Удаляет все сообщения из msg_to_cleanup и очищает список."""
+    data = await state.get_data()
+    ids = list(data.get("msg_to_cleanup") or [])
+    for mid in ids:
+        try:
+            await bot.delete_message(chat_id=chat_id, message_id=mid)
+        except Exception:
+            pass
+    await state.update_data(msg_to_cleanup=[])
 
 
 async def delete_messages_and_clear(bot, chat_id: int, state: FSMContext):
