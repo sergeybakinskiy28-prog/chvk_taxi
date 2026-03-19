@@ -2987,14 +2987,14 @@ async def rate_trip_callback(callback: CallbackQuery, state: FSMContext):
         logger.exception(f"Error in rate_trip_callback: {e}")
     await callback.answer("Спасибо за оценку!")
 
-    # Восстанавливаем главное меню с постоянной кнопкой «🚖 Заказать такси»
+    # Восстанавливаем главное меню с инлайн-кнопкой «Заказать такси»
     try:
-        menu_kb = await _get_menu_for_user(callback.from_user.id)
         await state.clear()
-        await callback.message.answer(
+        sent = await callback.message.answer(
             "Нажмите кнопку ниже, чтобы заказать такси снова.",
-            reply_markup=menu_kb,
+            reply_markup=keyboards.get_start_order_inline_keyboard(),
         )
+        await state.update_data(last_menu_msg_id=sent.message_id)
     except Exception as e:
         logger.error(f"Failed to send menu after rating for {callback.from_user.id}: {e}")
 
