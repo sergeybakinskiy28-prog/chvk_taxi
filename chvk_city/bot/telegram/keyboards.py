@@ -279,7 +279,6 @@ def get_destination_flow_keyboard():
         [InlineKeyboardButton(text="➕ Добавить еще остановку", callback_data="add_more_address")],
         [InlineKeyboardButton(text="Далее", callback_data="finish_route")],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_from")],
-        [InlineKeyboardButton(text="❌ Отменить заказ", callback_data="cancel_order_creation")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -298,7 +297,6 @@ def get_order_options_keyboard(has_child_seat: bool = False, has_pet: bool = Fal
         [InlineKeyboardButton(text="✍️ Добавить комментарий", callback_data="add_order_comment")],
         [InlineKeyboardButton(text="Далее", callback_data="calculate_order_price")],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_to_address")],
-        [InlineKeyboardButton(text="❌ Отменить заказ", callback_data="cancel_order_creation")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 

@@ -364,7 +364,6 @@ def _build_recent_addresses_keyboard(addresses: list[str], step: str):
     )
     if step == "to":
         builder.button(text="⬅️ Назад", callback_data="back_to_from")
-        builder.button(text="❌ Отменить заказ", callback_data="cancel_order_creation")
     builder.adjust(1)
     return builder.as_markup()
 
