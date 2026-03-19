@@ -446,7 +446,9 @@ async def _save_destination_and_show_options(
                 reply_markup=keyboard,
             )
         except Exception:
-            await _delete_messages(target_message.bot, target_message.chat.id, [edit_message_id])
+            # Удаляем все отслеживаемые сообщения, включая текущее
+            all_to_delete = list({edit_message_id, *msg_list})
+            await _delete_messages(target_message.bot, target_message.chat.id, all_to_delete)
             sent = await target_message.answer(route_text, reply_markup=keyboard)
             edit_message_id = sent.message_id
         await state.update_data(msg_to_delete=[edit_message_id], route_message_id=edit_message_id)
@@ -1612,17 +1614,15 @@ async def back_to_menu_callback(callback: CallbackQuery, state: FSMContext):
 async def manual_from_callback(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     try:
-        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.message.edit_text(
+            "Напишите адрес улицы и номер дома (откуда забрать):",
+            reply_markup=None,
+        )
+        msg_id = callback.message.message_id
     except Exception:
-        pass
-    sent = await callback.message.answer(
-        "Напишите адрес улицы и номер дома (откуда забрать):",
-        reply_markup=ReplyKeyboardRemove(),
-    )
-    data = await state.get_data()
-    msg_list = data.get("msg_to_delete", [])
-    msg_list.append(sent.message_id)
-    await state.update_data(msg_to_delete=msg_list)
+        sent = await callback.message.answer("Напишите адрес улицы и номер дома (откуда забрать):")
+        msg_id = sent.message_id
+    await state.update_data(msg_to_delete=[msg_id])
 
 
 @router.callback_query(F.data == "manual_to", OrderTaxi.waiting_for_to_address)
@@ -1752,20 +1752,29 @@ async def back_to_from_callback(callback: CallbackQuery, state: FSMContext):
     """Шаг 'Куда' → назад → шаг 'Откуда'. Сбрасывает from_address и всё что после."""
     await callback.answer()
     recent = await _get_recent_addresses(callback.from_user.id, "from")
-    await state.update_data(
-        from_address=None,
-        to_address=None,
-        destination_addresses=[],
-        recent_from_addresses=recent,
-    )
-    await state.set_state(OrderTaxi.waiting_for_from_address)
     try:
         await callback.message.edit_text(
             "📍 Откуда вас забрать?\nВыберите из списка ниже или введите новый:",
             reply_markup=_build_recent_addresses_keyboard(recent, "from"),
         )
+        msg_id = callback.message.message_id
     except Exception:
-        pass
+        data = await state.get_data()
+        await _delete_messages(callback.bot, callback.message.chat.id, data.get("msg_to_delete", []))
+        sent = await callback.message.answer(
+            "📍 Откуда вас забрать?\nВыберите из списка ниже или введите новый:",
+            reply_markup=_build_recent_addresses_keyboard(recent, "from"),
+        )
+        msg_id = sent.message_id
+    await state.update_data(
+        from_address=None,
+        to_address=None,
+        destination_addresses=[],
+        recent_from_addresses=recent,
+        route_message_id=None,
+        msg_to_delete=[msg_id],
+    )
+    await state.set_state(OrderTaxi.waiting_for_from_address)
 
 
 @router.callback_query(F.data == "back_to_to_address", OrderTaxi.waiting_for_options)
@@ -1775,20 +1784,25 @@ async def back_to_to_address_callback(callback: CallbackQuery, state: FSMContext
     data = await state.get_data()
     from_address = data.get("from_address") or "—"
     recent = await _get_recent_addresses(callback.from_user.id, "to")
-    await state.update_data(
-        to_address=None,
-        destination_addresses=[],
-        recent_to_addresses=recent,
-    )
-    await state.set_state(OrderTaxi.waiting_for_to_address)
     text = f"📍 Откуда: {from_address}\n\n🏁 Куда едем?\nВыберите из списка ниже или введите новый:"
     try:
         await callback.message.edit_text(
             text,
             reply_markup=_build_recent_addresses_keyboard(recent, "to"),
         )
+        msg_id = callback.message.message_id
     except Exception:
-        pass
+        await _delete_messages(callback.bot, callback.message.chat.id, data.get("msg_to_delete", []))
+        sent = await callback.message.answer(text, reply_markup=_build_recent_addresses_keyboard(recent, "to"))
+        msg_id = sent.message_id
+    await state.update_data(
+        to_address=None,
+        destination_addresses=[],
+        recent_to_addresses=recent,
+        route_message_id=msg_id,
+        msg_to_delete=[msg_id],
+    )
+    await state.set_state(OrderTaxi.waiting_for_to_address)
 
 
 @router.callback_query(F.data == "back_to_options", OrderTaxi.waiting_for_confirmation)
@@ -1801,7 +1815,6 @@ async def back_to_options_callback(callback: CallbackQuery, state: FSMContext):
     has_child_seat = bool(data.get("has_child_seat"))
     has_pet = bool(data.get("has_pet"))
     order_comment = data.get("order_comment")
-    await state.set_state(OrderTaxi.waiting_for_options)
     try:
         await callback.message.edit_text(
             _build_order_options_text(from_address, destination_addresses, order_comment),
@@ -1810,8 +1823,16 @@ async def back_to_options_callback(callback: CallbackQuery, state: FSMContext):
                 has_pet=has_pet,
             ),
         )
+        msg_id = callback.message.message_id
     except Exception:
-        pass
+        await _delete_messages(callback.bot, callback.message.chat.id, data.get("msg_to_delete", []))
+        sent = await callback.message.answer(
+            _build_order_options_text(from_address, destination_addresses, order_comment),
+            reply_markup=keyboards.get_order_options_keyboard(has_child_seat=has_child_seat, has_pet=has_pet),
+        )
+        msg_id = sent.message_id
+    await state.update_data(msg_to_delete=[msg_id])
+    await state.set_state(OrderTaxi.waiting_for_options)
 
 
 @router.callback_query(F.data == "toggle_child_seat", OrderTaxi.waiting_for_options)
@@ -1860,17 +1881,17 @@ async def toggle_pet_callback(callback: CallbackQuery, state: FSMContext):
 async def add_order_comment_callback(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     try:
-        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.message.edit_text(
+            "✍️ Напишите комментарий для водителя.\nНапример: Подъезд 2.",
+            reply_markup=None,
+        )
+        msg_id = callback.message.message_id
     except Exception:
-        pass
-    sent = await callback.message.answer(
-        "✍️ Напишите комментарий для водителя.\nНапример: Подъезд 2.",
-        reply_markup=ReplyKeyboardRemove(),
-    )
-    data = await state.get_data()
-    msg_list = data.get("msg_to_delete", [])
-    msg_list.append(sent.message_id)
-    await state.update_data(msg_to_delete=msg_list)
+        data = await state.get_data()
+        await _delete_messages(callback.bot, callback.message.chat.id, data.get("msg_to_delete", []))
+        sent = await callback.message.answer("✍️ Напишите комментарий для водителя.\nНапример: Подъезд 2.")
+        msg_id = sent.message_id
+    await state.update_data(msg_to_delete=[msg_id])
     await state.set_state(OrderTaxi.waiting_for_comment)
 
 
