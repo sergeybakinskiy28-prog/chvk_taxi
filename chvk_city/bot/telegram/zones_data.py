@@ -5,8 +5,11 @@
 Исключение: Озон ↔ Губашево — цена одинакова в обе стороны.
 """
 
-import httpx
+import json
 import logging as _logging
+from pathlib import Path
+
+import httpx
 
 _geo_logger = _logging.getLogger("zones_data.geocoder")
 
@@ -15,6 +18,72 @@ _geo_logger = _logging.getLogger("zones_data.geocoder")
 # ---------------------------------------------------------------------------
 YANDEX_GEOCODER_API_KEY = "241bb853-1221-40ff-9336-2e86602627fc"
 _CITY_PREFIX = "Чапаевск, "
+
+# ---------------------------------------------------------------------------
+# GeoJSON — полигоны зон Чапаевска
+# Файл лежит на уровень выше этого модуля: chvk_city/bot/zones.geojson.geojson
+# ---------------------------------------------------------------------------
+
+# Сопоставление description из GeoJSON → ключ в ZONE_PRICES
+_GEOJSON_ZONE_MAP: dict[str, str | None] = {
+    "Нагорный":                  "Нагорный",
+    "Титовка":                   None,          # пропускаем — используем Начало/Конец
+    "Озон":                      "Озон",
+    "Проспект":                  "Проспект",
+    "Кубашева":                  "Губашево",    # название в GeoJSON отличается
+    "30-й":                      "30-й",
+    "Центр":                     "Центр",
+    "Владимирский":              "Владимир",    # GeoJSON содержит \n — strip() уберёт
+    "Берсол":                    "Берсол",
+    "Луч":                       "Луч",
+    "Титовка (Начало)":          "Титовка (Начало)",
+    "Титовка (Конец)":           "Титовка (Конец)",
+    "Лесничество Чапаевское":    "Лесничество",
+}
+
+# Список (zone_name, shapely_polygon) — заполняется при импорте
+_ZONE_POLYGONS: list[tuple[str, object]] = []
+
+def _load_zone_polygons() -> None:
+    """Загружает полигоны из GeoJSON в _ZONE_POLYGONS. Вызывается один раз при импорте."""
+    global _ZONE_POLYGONS
+    try:
+        from shapely.geometry import shape as _shape
+    except ImportError:
+        print("[GEO] shapely не установлен — определение зон по полигонам недоступно", flush=True)
+        return
+
+    geojson_path = Path(__file__).parent.parent / "zones.geojson.geojson"
+    if not geojson_path.exists():
+        print(f"[GEO] GeoJSON не найден: {geojson_path}", flush=True)
+        return
+
+    try:
+        data = json.loads(geojson_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        print(f"[GEO] Ошибка чтения GeoJSON: {e}", flush=True)
+        return
+
+    loaded = 0
+    for feature in data.get("features", []):
+        geom = feature.get("geometry", {})
+        if geom.get("type") != "Polygon":
+            continue
+        desc = (feature.get("properties") or {}).get("description", "").strip()
+        zone_name = _GEOJSON_ZONE_MAP.get(desc)
+        if zone_name is None:
+            continue  # None = явно пропускаем, missing key = неизвестная зона
+        try:
+            polygon = _shape(geom)
+            _ZONE_POLYGONS.append((zone_name, polygon))
+            loaded += 1
+        except Exception as e:
+            print(f"[GEO] Ошибка построения полигона '{desc}': {e}", flush=True)
+
+    print(f"[GEO] Загружено {loaded} полигонов из GeoJSON", flush=True)
+
+
+_load_zone_polygons()
 
 # ---------------------------------------------------------------------------
 # Ключевые слова улиц по районам
@@ -199,13 +268,31 @@ DEFAULT_RIDE_MINUTES = 15
 # Публичные функции
 # ---------------------------------------------------------------------------
 
+def get_zone_by_coords(lon: float, lat: float) -> str | None:
+    """
+    Определяет зону по координатам (WGS-84) через полигоны из GeoJSON.
+    Возвращает название зоны или None.
+    """
+    if not _ZONE_POLYGONS:
+        return None
+    try:
+        from shapely.geometry import Point as _Point
+        pt = _Point(lon, lat)
+        for zone_name, polygon in _ZONE_POLYGONS:
+            if polygon.contains(pt):
+                return zone_name
+    except Exception as e:
+        print(f"[GEO] Ошибка point-in-polygon: {e}", flush=True)
+    return None
+
+
 async def get_zone_by_address_geocoded(address: str) -> str | None:
     """
-    Определяет зону через Яндекс Геокодер:
+    Определяет зону через Яндекс Геокодер + полигоны GeoJSON:
       1. Логирует исходный адрес.
       2. Добавляет префикс «Чапаевск, » и отправляет в API.
       3. Логирует координаты и полный ответ Яндекса.
-      4. Определяет зону по ключевым словам нормализованного адреса.
+      4. Определяет зону по полигонам (shapely), при неудаче — по ключевым словам.
       5. Логирует итоговую зону.
     """
     original = (address or "").strip()
@@ -248,13 +335,23 @@ async def get_zone_by_address_geocoded(address: str) -> str | None:
         )
 
         parts = pos.split()
-        lon = parts[0] if len(parts) > 0 else "?"
-        lat = parts[1] if len(parts) > 1 else "?"
-        print(f"[GEO] Координаты: lon={lon}, lat={lat}", flush=True)
+        lon_str = parts[0] if len(parts) > 0 else None
+        lat_str = parts[1] if len(parts) > 1 else None
+        print(f"[GEO] Координаты: lon={lon_str}, lat={lat_str}", flush=True)
         print(f"[GEO] Полный адрес от Яндекс: {formatted!r}", flush=True)
 
-        zone = get_zone_by_address(formatted)
-        print(f"[GEO] Определена зона: {zone!r}", flush=True)
+        # Определяем зону по полигонам (точнее), с фоллбэком на ключевые слова
+        zone = None
+        if lon_str and lat_str:
+            try:
+                zone = get_zone_by_coords(float(lon_str), float(lat_str))
+            except ValueError:
+                pass
+        if zone is None:
+            zone = get_zone_by_address(formatted)
+            print(f"[GEO] Зона по ключевым словам (fallback): {zone!r}", flush=True)
+        else:
+            print(f"[GEO] Зона по полигону: {zone!r}", flush=True)
         return zone
 
     except Exception as e:
