@@ -2,6 +2,7 @@ import asyncio
 import logging
 import httpx
 from aiogram import Router, F
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import Message, CallbackQuery, ReplyKeyboardRemove, ReplyKeyboardMarkup
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
@@ -94,6 +95,8 @@ async def process_from_address(message: Message, state: FSMContext):
 
 @router.message(OrderTaxi.waiting_for_to_address, F.text)
 async def process_to_address(message: Message, state: FSMContext):
+    if message.text and message.text.startswith('/'):
+        return
     data = await state.get_data()
     if not data.get("from_address"):
         await state.clear()
@@ -781,6 +784,7 @@ async def _send_single_window(
 @router.message(F.text == "🚖 Заказать такси")
 @router.message(F.text == "🚕 Заказать такси")
 async def taxi_order_start(message: Message, state: FSMContext):
+    await message.delete()
     data = await state.get_data()
     messages_to_delete = data.get("messages_to_delete", [])
 
@@ -820,8 +824,8 @@ async def start_order_inline_callback(callback: CallbackQuery, state: FSMContext
     for mid in _get_technical_messages_kill_list(data):
         await _delete_or_clear_buttons_safe(callback.bot, chat_id, mid)
     try:
-        await callback.message.edit_reply_markup(reply_markup=None)
-    except Exception:
+        await callback.message.delete()
+    except TelegramBadRequest:
         pass
     await state.clear()
     await state.update_data(messages_to_delete=messages_to_delete)
@@ -1849,6 +1853,11 @@ async def cancel_order_creation_callback(callback: CallbackQuery, state: FSMCont
             await callback.bot.delete_message(chat_id=chat_id, message_id=msg_id)
         except Exception:
             pass
+    await perform_cleanup(callback.bot, callback.message.chat.id, state)
+    try:
+        await callback.message.delete()
+    except TelegramBadRequest:
+        pass
     await state.clear()
     sent = await callback.message.answer(
         "Заказ отменен. Вы можете начать новый заказ в любое время.",
