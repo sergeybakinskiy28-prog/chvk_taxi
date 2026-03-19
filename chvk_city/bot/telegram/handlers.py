@@ -362,6 +362,9 @@ def _build_recent_addresses_keyboard(addresses: list[str], step: str):
         text="⌨️ Ввести адрес вручную",
         callback_data=manual_callback,
     )
+    if step == "to":
+        builder.button(text="⬅️ Назад", callback_data="back_to_from")
+        builder.button(text="❌ Отменить заказ", callback_data="cancel_order_creation")
     builder.adjust(1)
     return builder.as_markup()
 
@@ -1743,6 +1746,73 @@ async def finish_route_callback(callback: CallbackQuery, state: FSMContext):
     await _show_order_options_screen(callback.message, state)
 
 
+@router.callback_query(F.data == "back_to_from", OrderTaxi.waiting_for_to_address)
+async def back_to_from_callback(callback: CallbackQuery, state: FSMContext):
+    """Шаг 'Куда' → назад → шаг 'Откуда'. Сбрасывает from_address и всё что после."""
+    await callback.answer()
+    recent = await _get_recent_addresses(callback.from_user.id, "from")
+    await state.update_data(
+        from_address=None,
+        to_address=None,
+        destination_addresses=[],
+        recent_from_addresses=recent,
+    )
+    await state.set_state(OrderTaxi.waiting_for_from_address)
+    try:
+        await callback.message.edit_text(
+            "📍 Откуда вас забрать?\nВыберите из списка ниже или введите новый:",
+            reply_markup=_build_recent_addresses_keyboard(recent, "from"),
+        )
+    except Exception:
+        pass
+
+
+@router.callback_query(F.data == "back_to_to_address", OrderTaxi.waiting_for_options)
+async def back_to_to_address_callback(callback: CallbackQuery, state: FSMContext):
+    """Шаг 'Опции' → назад → шаг 'Куда'. Сбрасывает to_address, сохраняет from_address."""
+    await callback.answer()
+    data = await state.get_data()
+    from_address = data.get("from_address") or "—"
+    recent = await _get_recent_addresses(callback.from_user.id, "to")
+    await state.update_data(
+        to_address=None,
+        destination_addresses=[],
+        recent_to_addresses=recent,
+    )
+    await state.set_state(OrderTaxi.waiting_for_to_address)
+    text = f"📍 Откуда: {from_address}\n\n🏁 Куда едем?\nВыберите из списка ниже или введите новый:"
+    try:
+        await callback.message.edit_text(
+            text,
+            reply_markup=_build_recent_addresses_keyboard(recent, "to"),
+        )
+    except Exception:
+        pass
+
+
+@router.callback_query(F.data == "back_to_options", OrderTaxi.waiting_for_confirmation)
+async def back_to_options_callback(callback: CallbackQuery, state: FSMContext):
+    """Шаг 'Подтверждение' → назад → шаг 'Опции'. Данные не сбрасываются."""
+    await callback.answer()
+    data = await state.get_data()
+    from_address = data.get("from_address") or "—"
+    destination_addresses = data.get("destination_addresses") or []
+    has_child_seat = bool(data.get("has_child_seat"))
+    has_pet = bool(data.get("has_pet"))
+    order_comment = data.get("order_comment")
+    await state.set_state(OrderTaxi.waiting_for_options)
+    try:
+        await callback.message.edit_text(
+            _build_order_options_text(from_address, destination_addresses, order_comment),
+            reply_markup=keyboards.get_order_options_keyboard(
+                has_child_seat=has_child_seat,
+                has_pet=has_pet,
+            ),
+        )
+    except Exception:
+        pass
+
+
 @router.callback_query(F.data == "toggle_child_seat", OrderTaxi.waiting_for_options)
 async def toggle_child_seat_callback(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
@@ -1849,6 +1919,7 @@ async def confirm_order_creation_callback(callback: CallbackQuery, state: FSMCon
     await finalize_order(callback.message, state, requester_telegram_id=callback.from_user.id)
 
 
+@router.callback_query(F.data == "cancel_order_creation", OrderTaxi.waiting_for_to_address)
 @router.callback_query(F.data == "cancel_order_creation", OrderTaxi.waiting_for_options)
 @router.callback_query(F.data == "cancel_order_creation", OrderTaxi.waiting_for_confirmation)
 async def cancel_order_creation_callback(callback: CallbackQuery, state: FSMContext):
