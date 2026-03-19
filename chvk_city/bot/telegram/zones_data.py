@@ -3,10 +3,18 @@
 Матрица цен — направленная: (from_zone, to_zone) != (to_zone, from_zone) там, где цены различаются.
 Правило Озон: поездка ИЗ Озона в город дороже на ~50 руб., чем В Озон.
 Исключение: Озон ↔ Губашево — цена одинакова в обе стороны.
-
-Яндекс API ключ (для геокодинга, будущее использование):
-YANDEX_GEOCODER_API_KEY = "241bb853-1221-40ff-9336-2e86602627fc"
 """
+
+import httpx
+import logging as _logging
+
+_geo_logger = _logging.getLogger("zones_data.geocoder")
+
+# ---------------------------------------------------------------------------
+# Яндекс Геокодер
+# ---------------------------------------------------------------------------
+YANDEX_GEOCODER_API_KEY = "241bb853-1221-40ff-9336-2e86602627fc"
+_CITY_PREFIX = "Чапаевск, "
 
 # ---------------------------------------------------------------------------
 # Ключевые слова улиц по районам
@@ -161,6 +169,68 @@ DEFAULT_RIDE_MINUTES = 15
 # ---------------------------------------------------------------------------
 # Публичные функции
 # ---------------------------------------------------------------------------
+
+async def get_zone_by_address_geocoded(address: str) -> str | None:
+    """
+    Определяет зону через Яндекс Геокодер:
+      1. Логирует исходный адрес.
+      2. Добавляет префикс «Чапаевск, » и отправляет в API.
+      3. Логирует координаты и полный ответ Яндекса.
+      4. Определяет зону по ключевым словам нормализованного адреса.
+      5. Логирует итоговую зону.
+    """
+    original = (address or "").strip()
+    full_address = _CITY_PREFIX + original
+
+    print(f"[GEO] Исходный адрес: {original!r}", flush=True)
+    print(f"[GEO] Запрос в Яндекс: {full_address!r}", flush=True)
+
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(
+                "https://geocode-maps.yandex.ru/1.x/",
+                params={
+                    "apikey": YANDEX_GEOCODER_API_KEY,
+                    "geocode": full_address,
+                    "format": "json",
+                    "results": 1,
+                    "lang": "ru_RU",
+                },
+            )
+        resp.raise_for_status()
+        data = resp.json()
+
+        members = (
+            data
+            .get("response", {})
+            .get("GeoObjectCollection", {})
+            .get("featureMember", [])
+        )
+        if not members:
+            print(f"[GEO] Яндекс не нашёл адрес: {full_address!r}", flush=True)
+            return None
+
+        geo = members[0]["GeoObject"]
+        pos = geo.get("Point", {}).get("pos", "")
+        formatted = (
+            geo.get("metaDataProperty", {})
+               .get("GeocoderMetaData", {})
+               .get("text", "")
+        )
+
+        parts = pos.split()
+        lon = parts[0] if len(parts) > 0 else "?"
+        lat = parts[1] if len(parts) > 1 else "?"
+        print(f"[GEO] Координаты: lon={lon}, lat={lat}", flush=True)
+        print(f"[GEO] Полный адрес от Яндекс: {formatted!r}", flush=True)
+
+        zone = get_zone_by_address(formatted)
+        print(f"[GEO] Определена зона: {zone!r}", flush=True)
+        return zone
+
+    except Exception as e:
+        print(f"[GEO] Ошибка геокодинга ({type(e).__name__}): {e}", flush=True)
+        return None
 
 def get_zone_by_address(address_text: str) -> str | None:
     """
