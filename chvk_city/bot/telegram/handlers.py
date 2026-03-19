@@ -1,4 +1,5 @@
 import asyncio
+import datetime
 import logging
 import httpx
 from aiogram import Router, F
@@ -514,10 +515,29 @@ def _zone_for_address(address: str, stored_zone: str | None = None) -> str | Non
     return get_zone_by_address(address)
 
 
+_SAMARA_TZ = datetime.timezone(datetime.timedelta(hours=4))
+
+
+def _night_surcharge_per_segment() -> float:
+    """
+    Возвращает ночную надбавку на один сегмент (по времени Самары, UTC+4):
+      22:00–01:00 → +50 руб.
+      01:00–05:00 → +100 руб.
+      остальное   → 0 руб.
+    """
+    now = datetime.datetime.now(_SAMARA_TZ)
+    h = now.hour
+    if 22 <= h or h < 1:
+        return 50.0
+    if 1 <= h < 5:
+        return 100.0
+    return 0.0
+
+
 def _estimate_order_price(data: dict) -> tuple[float, str | None]:
     """
     Рассчитывает стоимость маршрута по сегментам: A→B + B→C + ...
-    Каждый сегмент — отдельная цена из ZONE_PRICES.
+    Каждый сегмент — отдельная цена из ZONE_PRICES + ночная надбавка.
     Если хотя бы один сегмент не распознан — добавляется примечание.
     """
     from_address = data.get("from_address") or ""
@@ -531,6 +551,7 @@ def _estimate_order_price(data: dict) -> tuple[float, str | None]:
     for i, z in enumerate(to_zones_stored):
         stored_zones[i + 1] = z
 
+    night_surcharge = _night_surcharge_per_segment()
     total_legs = 0.0
     any_unrecognized = False
 
@@ -538,17 +559,20 @@ def _estimate_order_price(data: dict) -> tuple[float, str | None]:
         zone_a = _zone_for_address(all_addresses[i],     stored_zones.get(i))
         zone_b = _zone_for_address(all_addresses[i + 1], stored_zones.get(i + 1))
         leg_price, recognized = get_zone_price(zone_a, zone_b)
+        leg_total = leg_price + night_surcharge
         print(
             f"[PRICE] Сегмент {i+1}: '{all_addresses[i]}' ({zone_a}) → "
-            f"'{all_addresses[i+1]}' ({zone_b}) = {leg_price}₽ (recognized={recognized})",
+            f"'{all_addresses[i+1]}' ({zone_b}) = {leg_price}₽"
+            + (f" +{night_surcharge:.0f}₽ ночь" if night_surcharge else "")
+            + f" (recognized={recognized})",
             flush=True,
         )
         if not recognized:
             any_unrecognized = True
-        total_legs += leg_price
+        total_legs += leg_total
 
-    child_seat_price = 50.0 if data.get("has_child_seat") else 0.0
-    pet_price = 30.0 if data.get("has_pet") else 0.0
+    child_seat_price = 48.0 if data.get("has_child_seat") else 0.0
+    pet_price = 48.0 if data.get("has_pet") else 0.0
     total = total_legs + child_seat_price + pet_price
     price_note = DEFAULT_PRICE_NOTE if any_unrecognized else None
     return total, price_note
