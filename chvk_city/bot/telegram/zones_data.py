@@ -268,6 +268,46 @@ DEFAULT_RIDE_MINUTES = 15
 # Публичные функции
 # ---------------------------------------------------------------------------
 
+async def reverse_geocode(lat: float, lon: float) -> str | None:
+    """
+    Обратное геокодирование: координаты → читаемый адрес через Яндекс Геокодер.
+    Возвращает строку вида 'улица Ленина, 10' или None при ошибке.
+    """
+    print(f"[GEO] Reverse geocode: lat={lat:.5f}, lon={lon:.5f}", flush=True)
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(
+                "https://geocode-maps.yandex.ru/1.x/",
+                params={
+                    "apikey": YANDEX_GEOCODER_API_KEY,
+                    "geocode": f"{lon},{lat}",
+                    "format": "json",
+                    "results": 1,
+                    "lang": "ru_RU",
+                },
+            )
+        resp.raise_for_status()
+        data = resp.json()
+        members = (
+            data.get("response", {})
+                .get("GeoObjectCollection", {})
+                .get("featureMember", [])
+        )
+        if not members:
+            return None
+        meta = members[0]["GeoObject"].get("metaDataProperty", {}).get("GeocoderMetaData", {})
+        # Prefer short formatted address, fall back to full text
+        formatted = (
+            meta.get("Address", {}).get("formatted")
+            or meta.get("text")
+        )
+        print(f"[GEO] Reverse geocode result: {formatted!r}", flush=True)
+        return formatted or None
+    except Exception as e:
+        print(f"[GEO] Reverse geocode error ({type(e).__name__}): {e}", flush=True)
+        return None
+
+
 def get_zone_by_coords(lon: float, lat: float) -> str | None:
     """
     Определяет зону по координатам (WGS-84) через полигоны из GeoJSON.

@@ -390,3 +390,13 @@ def get_phone_keyboard():
         input_field_placeholder="Используйте кнопки меню 👇",
         is_persistent=True,
     )
+
+
+def get_location_keyboard() -> ReplyKeyboardMarkup:
+    """Одна кнопка запроса геолокации — показывается после нажатия '📍 Поделиться геолокацией'."""
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="📍 Отправить мою геолокацию", request_location=True)]],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+        input_field_placeholder="Нажмите кнопку ниже 👇",
+    )
