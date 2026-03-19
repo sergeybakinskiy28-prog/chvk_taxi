@@ -237,11 +237,15 @@ def get_driver_districts_keyboard():
     )
 
 
-def get_driver_accept_keyboard(order_id: int, from_address: str, client_phone: str | None = None) -> InlineKeyboardMarkup:
+def get_driver_accept_keyboard(
+    order_id: int,
+    from_address: str,
+    client_phone: str | None = None,
+    client_telegram_id: int | None = None,
+) -> InlineKeyboardMarkup:
     """
     Клавиатура для водителя сразу после принятия заказа.
-    Порядок сверху вниз: Маршрут → Я на месте → Позвонить клиенту → Отменить.
-    Каждая кнопка — отдельная строка для удобства нажатия во время движения.
+    Порядок: Маршрут → Я на месте → Написать клиенту → Позвонить клиенту → Отменить.
     """
     from_url = _yandex_route(from_address)
     buttons: list[list[InlineKeyboardButton]] = [
@@ -249,6 +253,8 @@ def get_driver_accept_keyboard(order_id: int, from_address: str, client_phone: s
         [InlineKeyboardButton(text="✅ Я на месте", callback_data=f"at_place_{order_id}")],
         [InlineKeyboardButton(text="❌ Отменить поездку", callback_data=f"driver_cancel_{order_id}")],
     ]
+    if client_telegram_id:
+        buttons.insert(2, [InlineKeyboardButton(text="💬 Написать клиенту", url=f"tg://user?id={client_telegram_id}")])
     if client_phone:
         buttons.insert(2, [InlineKeyboardButton(text="📞 Позвонить клиенту", callback_data=f"driver_call_{order_id}")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)

@@ -2148,7 +2148,8 @@ async def eta_select_callback(callback: CallbackQuery, state: FSMContext):
                     reply_markup=keyboards.get_driver_accept_keyboard(
                         order_id,
                         order["from_address"],
-                        order.get("client_phone"),
+                        client_phone=order.get("client_phone"),
+                        client_telegram_id=order.get("client_telegram_id"),
                     ),
                 )
             except Exception as e:
