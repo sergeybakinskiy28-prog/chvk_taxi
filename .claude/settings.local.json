@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(python:*)",
-      "Bash(powershell -ExecutionPolicy Bypass -File upd.ps1 \"auto-update\")"
+      "Bash(powershell -ExecutionPolicy Bypass -File upd.ps1 \"auto-update\")",
+      "Bash(powershell -ExecutionPolicy Bypass -File upd.ps1 \"Fix: split multi-stop to_address into individual address buttons\")"
     ]
   }
 }

@@ -144,10 +144,21 @@ class TaxiService:
             )
             .group_by(address_column)
             .order_by(func.max(Order.created_at).desc())
-            .limit(limit)
+            .limit(limit * 3)
         )
 
-        return [row.address for row in result.all() if row.address]
+        # to_address may contain multiple stops joined by "\n" — split into individual addresses
+        seen: list[str] = []
+        for row in result.all():
+            if not row.address:
+                continue
+            parts = [p.strip() for p in row.address.split("\n") if p.strip()]
+            for part in parts:
+                if part not in seen:
+                    seen.append(part)
+                if len(seen) >= limit:
+                    return seen
+        return seen
     @staticmethod
     async def get_driver(db: AsyncSession, telegram_id: int) -> Driver | None:
         result = await db.execute(
