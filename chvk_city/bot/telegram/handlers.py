@@ -16,10 +16,8 @@ from chvk_city.bot.telegram import keyboards
 from chvk_city.bot.telegram.constants import OWNER_ID
 from chvk_city.bot.telegram.zones_data import (
     get_zone_by_address,
-    get_zone_by_coords,
     get_zone_price,
     get_ride_minutes,
-    reverse_geocode,
     DEFAULT_ZONE_PRICE,
     DEFAULT_PRICE_NOTE,
 )
@@ -90,7 +88,6 @@ async def process_from_address(message: Message, state: FSMContext):
     except Exception:
         pass
     await _delete_messages(message.bot, message.chat.id, prev_msg_ids)
-    await _remove_reply_keyboard(message.bot, message.chat.id)
     await state.update_data(msg_to_delete=[])
     print(f"DEBUG ORDER: saved from_address='{from_address}' for user {message.from_user.id}", flush=True)
     await _prompt_for_to_address(message, state, message.from_user.id)
@@ -133,7 +130,6 @@ async def process_to_address(message: Message, state: FSMContext):
         await message.delete()
     except Exception:
         pass
-    await _remove_reply_keyboard(message.bot, message.chat.id)
     await _save_destination_and_show_options(
         message, state, to_address, message.from_user.id, edit_message_id=edit_id
     )
@@ -354,11 +350,7 @@ def _build_recent_addresses_keyboard(addresses: list[str], step: str):
     builder = InlineKeyboardBuilder()
     prefix = "recent_from" if step == "from" else "recent_to"
     manual_callback = "manual_from" if step == "from" else "manual_to"
-    location_callback = "request_location_from" if step == "from" else "request_location_to"
     icon = "🏠" if step == "from" else "📍"
-
-    # Кнопка геолокации — вверху
-    builder.button(text="📍 Поделиться геолокацией", callback_data=location_callback)
 
     for idx, address in enumerate(addresses):
         builder.button(
@@ -514,9 +506,8 @@ def _estimate_order_price(data: dict) -> tuple[float, str | None]:
     destination_addresses = data.get("destination_addresses") or []
     first_to = destination_addresses[0] if destination_addresses else ""
 
-    # GPS-зоны имеют приоритет перед keyword-matching
-    from_zone = data.get("from_zone") or get_zone_by_address(from_address)
-    to_zone = data.get("to_zone") or get_zone_by_address(first_to)
+    from_zone = get_zone_by_address(from_address)
+    to_zone = get_zone_by_address(first_to)
     zone_price, recognized = get_zone_price(from_zone, to_zone)
 
     if recognized:
@@ -612,8 +603,6 @@ async def _begin_order_flow(
         destination_addresses=[],
         from_address=None,
         to_address=None,
-        from_zone=None,
-        to_zone=None,
         has_child_seat=False,
         has_pet=False,
         order_comment=None,
@@ -780,15 +769,6 @@ async def _delete_or_clear_buttons_safe(bot, chat_id: int, message_id: int):
             )
         except Exception:
             pass
-
-
-async def _remove_reply_keyboard(bot, chat_id: int) -> None:
-    """Убирает ReplyKeyboard через отправку и немедленное удаление ghost-сообщения."""
-    try:
-        ghost = await bot.send_message(chat_id=chat_id, text=".", reply_markup=ReplyKeyboardRemove())
-        await bot.delete_message(chat_id=chat_id, message_id=ghost.message_id)
-    except Exception:
-        pass
 
 
 async def _send_single_window(
@@ -1793,8 +1773,6 @@ async def back_to_from_callback(callback: CallbackQuery, state: FSMContext):
         recent_from_addresses=recent,
         route_message_id=None,
         msg_to_delete=[msg_id],
-        from_zone=None,
-        to_zone=None,
     )
     await state.set_state(OrderTaxi.waiting_for_from_address)
 
@@ -1823,72 +1801,8 @@ async def back_to_to_address_callback(callback: CallbackQuery, state: FSMContext
         recent_to_addresses=recent,
         route_message_id=msg_id,
         msg_to_delete=[msg_id],
-        to_zone=None,
     )
     await state.set_state(OrderTaxi.waiting_for_to_address)
-
-
-@router.callback_query(F.data == "request_location_from", OrderTaxi.waiting_for_from_address)
-async def request_location_from_callback(callback: CallbackQuery, state: FSMContext):
-    await callback.answer()
-    data = await state.get_data()
-    sent = await callback.message.answer(
-        "Нажмите кнопку ниже, чтобы поделиться геолокацией:",
-        reply_markup=keyboards.get_location_keyboard(),
-    )
-    msg_list = data.get("msg_to_delete", [])
-    msg_list.append(sent.message_id)
-    await state.update_data(msg_to_delete=msg_list)
-
-
-@router.callback_query(F.data == "request_location_to", OrderTaxi.waiting_for_to_address)
-async def request_location_to_callback(callback: CallbackQuery, state: FSMContext):
-    await callback.answer()
-    data = await state.get_data()
-    sent = await callback.message.answer(
-        "Нажмите кнопку ниже, чтобы поделиться геолокацией:",
-        reply_markup=keyboards.get_location_keyboard(),
-    )
-    msg_list = data.get("msg_to_delete", [])
-    msg_list.append(sent.message_id)
-    await state.update_data(msg_to_delete=msg_list)
-
-
-@router.message(OrderTaxi.waiting_for_from_address, F.location)
-async def process_from_location(message: Message, state: FSMContext):
-    lat = message.location.latitude
-    lon = message.location.longitude
-    try:
-        await message.delete()
-    except Exception:
-        pass
-    zone = get_zone_by_coords(lon, lat)
-    print(f"[LOC] From: lat={lat:.5f}, lon={lon:.5f}, zone={zone!r}", flush=True)
-    address_text = await reverse_geocode(lat, lon) or f"📍 {lat:.5f}, {lon:.5f}"
-    data = await state.get_data()
-    await _delete_messages(message.bot, message.chat.id, data.get("msg_to_delete", []))
-    await _remove_reply_keyboard(message.bot, message.chat.id)
-    await state.update_data(msg_to_delete=[], from_address=address_text, from_zone=zone)
-    await _prompt_for_to_address(message, state, message.from_user.id)
-
-
-@router.message(OrderTaxi.waiting_for_to_address, F.location)
-async def process_to_location(message: Message, state: FSMContext):
-    lat = message.location.latitude
-    lon = message.location.longitude
-    try:
-        await message.delete()
-    except Exception:
-        pass
-    zone = get_zone_by_coords(lon, lat)
-    print(f"[LOC] To: lat={lat:.5f}, lon={lon:.5f}, zone={zone!r}", flush=True)
-    address_text = await reverse_geocode(lat, lon) or f"📍 {lat:.5f}, {lon:.5f}"
-    data = await state.get_data()
-    await _delete_messages(message.bot, message.chat.id, data.get("msg_to_delete", []))
-    await _remove_reply_keyboard(message.bot, message.chat.id)
-    if not data.get("destination_addresses"):
-        await state.update_data(to_zone=zone)
-    await _save_destination_and_show_options(message, state, address_text, message.from_user.id, edit_message_id=None)
 
 
 @router.callback_query(F.data == "back_to_options", OrderTaxi.waiting_for_confirmation)
