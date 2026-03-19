@@ -2035,10 +2035,20 @@ async def finalize_order(
                 f"🚕 <b>Новый заказ #{order_id}</b>\n\n"
                 f"<b>{route_vertical}</b>"
             )
+            # Опции — только если выбраны
+            _opts = []
+            if data.get("has_child_seat"):
+                _opts.append("👶 Детское кресло")
+            if data.get("has_pet"):
+                _opts.append("🐾 С питомцем")
+            if _opts:
+                driver_msg += "\n\n" + "\n".join(_opts)
+            # Текстовый комментарий — только если введён, курсивом
+            if data.get("order_comment"):
+                driver_msg += f"\n\n💬 <b>Комментарий:</b>\n<i>{data.get('order_comment')}</i>"
+            # Стоимость в конце
             if isinstance(calculated_price, (int, float)):
                 driver_msg += f"\n\n💰 Стоимость: <b>{calculated_price:.0f} руб.</b>"
-            if final_comment:
-                driver_msg += f"\n\n💬 Комментарий: {final_comment}"
 
             try:
                 await message.bot.send_message(
