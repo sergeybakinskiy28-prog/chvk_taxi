@@ -288,8 +288,8 @@ def get_destination_flow_keyboard():
 
 
 # Цены опций (должны совпадать с _estimate_order_price в handlers.py)
-CHILD_SEAT_PRICE = 50
-PET_PRICE = 30
+CHILD_SEAT_PRICE = 48
+PET_PRICE = 48
 
 
 def get_order_options_keyboard(has_child_seat: bool = False, has_pet: bool = False):
