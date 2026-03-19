@@ -1,6 +1,6 @@
 param($msg = "auto-update")
 
-$SSH_HOST = "root@sergeybakinskiy281"
+$SSH_HOST = "root@95.81.100.222"
 $REMOTE_DIR = "~/chvk_taxi"
 
 # 1. Local: commit and push
