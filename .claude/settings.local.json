@@ -6,7 +6,8 @@
       "Bash(powershell -ExecutionPolicy Bypass -File upd.ps1 \"Fix: split multi-stop to_address into individual address buttons\")",
       "Bash(ssh:*)",
       "Bash(powershell -ExecutionPolicy Bypass -File upd.ps1 \"Fix: restore perform_cleanup, remove zero-width space from cmd_start\")",
-      "Bash(powershell -ExecutionPolicy Bypass -File upd.ps1 \"Feat: add back button to all order creation steps\")"
+      "Bash(powershell -ExecutionPolicy Bypass -File upd.ps1 \"Feat: add back button to all order creation steps\")",
+      "Bash(powershell -ExecutionPolicy Bypass -File upd.ps1 \"Feat: set /start command description for menu button\")"
     ]
   }
 }

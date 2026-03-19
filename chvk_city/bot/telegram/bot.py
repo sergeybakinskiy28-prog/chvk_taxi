@@ -43,8 +43,7 @@ async def main():
 
         try:
             await bot.set_my_commands([
-                BotCommand(command="start", description="Запустить бота 🚀"),
-                BotCommand(command="driver", description="Стать водителем 🚕"),
+                BotCommand(command="start", description="🚕 Заказать такси / Главное меню"),
             ])
         except Exception as e:
             print(f"[WARN] set_my_commands: {e}", flush=True)
