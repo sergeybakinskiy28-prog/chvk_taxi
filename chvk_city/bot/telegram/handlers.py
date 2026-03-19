@@ -19,6 +19,7 @@ from chvk_city.bot.telegram.zones_data import (
     get_zone_by_address_geocoded,
     get_zone_price,
     get_ride_minutes,
+    get_poi,
     DEFAULT_ZONE_PRICE,
     DEFAULT_PRICE_NOTE,
 )
@@ -499,32 +500,53 @@ def _format_route_from_values(from_address: str | None, to_address: str | None) 
     return _format_route_vertical(from_address or "—", _split_destination_addresses(to_address))
 
 
+def _zone_for_address(address: str, stored_zone: str | None = None) -> str | None:
+    """Определяет зону для адреса: stored_zone → POI → ключевые слова."""
+    if stored_zone:
+        return stored_zone
+    poi = get_poi(address)
+    if poi:
+        return poi["zone"]
+    return get_zone_by_address(address)
+
+
 def _estimate_order_price(data: dict) -> tuple[float, str | None]:
     """
-    Рассчитывает стоимость заказа.
-    Возвращает (цена, примечание или None).
-    Если оба адреса опознаны по зонам — цена из ZONE_PRICES.
-    Иначе — стандартная цена и примечание «Цена рассчитана по городскому тарифу».
+    Рассчитывает стоимость маршрута по сегментам: A→B + B→C + ...
+    Каждый сегмент — отдельная цена из ZONE_PRICES.
+    Если хотя бы один сегмент не распознан — добавляется примечание.
     """
     from_address = data.get("from_address") or ""
     destination_addresses = data.get("destination_addresses") or []
-    first_to = destination_addresses[0] if destination_addresses else ""
 
-    from_zone = data.get("from_zone") or get_zone_by_address(from_address)
-    to_zone   = data.get("to_zone")   or get_zone_by_address(first_to)
-    zone_price, recognized = get_zone_price(from_zone, to_zone)
+    all_addresses = [from_address] + destination_addresses
 
-    if recognized:
-        base_price = zone_price
-        price_note = None
-    else:
-        base_price = DEFAULT_ZONE_PRICE
-        price_note = DEFAULT_PRICE_NOTE
+    # Зоны, уже известные из геокодера (только для первой точки и первого назначения)
+    stored_zones: dict[int, str | None] = {
+        0: data.get("from_zone"),
+        1: data.get("to_zone") if len(destination_addresses) == 1 else None,
+    }
 
-    extra_stop_price = 40.0 * max(0, len(destination_addresses) - 1)
+    total_legs = 0.0
+    any_unrecognized = False
+
+    for i in range(len(all_addresses) - 1):
+        zone_a = _zone_for_address(all_addresses[i],     stored_zones.get(i))
+        zone_b = _zone_for_address(all_addresses[i + 1], stored_zones.get(i + 1))
+        leg_price, recognized = get_zone_price(zone_a, zone_b)
+        print(
+            f"[PRICE] Сегмент {i+1}: '{all_addresses[i]}' ({zone_a}) → "
+            f"'{all_addresses[i+1]}' ({zone_b}) = {leg_price}₽ (recognized={recognized})",
+            flush=True,
+        )
+        if not recognized:
+            any_unrecognized = True
+        total_legs += leg_price
+
     child_seat_price = 50.0 if data.get("has_child_seat") else 0.0
     pet_price = 30.0 if data.get("has_pet") else 0.0
-    total = base_price + extra_stop_price + child_seat_price + pet_price
+    total = total_legs + child_seat_price + pet_price
+    price_note = DEFAULT_PRICE_NOTE if any_unrecognized else None
     return total, price_note
 
 
