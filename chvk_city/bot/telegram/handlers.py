@@ -536,13 +536,13 @@ def _build_final_summary_text(data: dict) -> str:
     if order_comment:
         options.append(f"💬 {order_comment}")
     options_text = "\n".join(options) if options else "—"
-    price_text = f"{price:.0f} руб." if isinstance(price, (int, float)) else "—"
+    price_text = f"<b>{price:.0f} руб.</b>" if isinstance(price, (int, float)) else "—"
     if price_note:
-        price_text += f"\n_{price_note}_"
+        price_text += f"\n<i>{price_note}</i>"
 
     return (
-        "✅ Итог заказа\n\n"
-        f"{_format_route_vertical(from_address, destination_addresses)}\n\n"
+        "✅ <b>Итог заказа</b>\n\n"
+        f"<b>{_format_route_vertical(from_address, destination_addresses)}</b>\n\n"
         f"🛠 Опции:\n{options_text}\n\n"
         f"💰 Стоимость: {price_text}"
     )
@@ -774,6 +774,7 @@ async def _send_single_window(
     target: Message,
     text: str,
     reply_markup=None,
+    parse_mode: str | None = None,
 ) -> Message:
     """
     Единое окно: перед отправкой нового сообщения удаляет предыдущее
@@ -786,7 +787,7 @@ async def _send_single_window(
             await target.bot.delete_message(chat_id=target.chat.id, message_id=last_id)
         except Exception:
             pass
-    sent = await target.answer(text, reply_markup=reply_markup)
+    sent = await target.answer(text, reply_markup=reply_markup, parse_mode=parse_mode)
     await state.update_data(last_bot_msg_id=sent.message_id)
     return sent
 
@@ -1513,8 +1514,9 @@ async def driver_go_online(message: Message, state: FSMContext):
     await state.set_state(DriverShift.waiting_for_district)
     await _send_single_window(
         state, message,
-        "Выберите вашу текущую локацию (стоянку):",
+        "<b>Выберите вашу текущую локацию (стоянку):</b>",
         reply_markup=keyboards.get_driver_districts_keyboard(),
+        parse_mode="HTML",
     )
 
 
@@ -1888,11 +1890,13 @@ async def calculate_order_price_callback(callback: CallbackQuery, state: FSMCont
         await callback.message.edit_text(
             _build_final_summary_text(summary_data),
             reply_markup=keyboards.get_order_confirmation_keyboard(),
+            parse_mode="HTML",
         )
     except Exception:
         sent = await callback.message.answer(
             _build_final_summary_text(summary_data),
             reply_markup=keyboards.get_order_confirmation_keyboard(),
+            parse_mode="HTML",
         )
         summary_message_id = sent.message_id
     await add_to_messages_to_delete(state, summary_message_id)
@@ -2028,19 +2032,20 @@ async def finalize_order(
             
             # Отправка в чат водителей
             driver_msg = (
-                f"🚕 **Новый заказ #{order_id}**\n\n"
-                f"{route_vertical}"
+                f"🚕 <b>Новый заказ #{order_id}</b>\n\n"
+                f"<b>{route_vertical}</b>"
             )
             if isinstance(calculated_price, (int, float)):
-                driver_msg += f"\n\n💰 Стоимость: {calculated_price:.0f} руб."
+                driver_msg += f"\n\n💰 Стоимость: <b>{calculated_price:.0f} руб.</b>"
             if final_comment:
                 driver_msg += f"\n\n💬 Комментарий: {final_comment}"
-            
+
             try:
                 await message.bot.send_message(
                     settings.DRIVER_CHAT_ID,
                     driver_msg,
-                    reply_markup=keyboards.get_accept_order_keyboard(order_id)
+                    reply_markup=keyboards.get_accept_order_keyboard(order_id),
+                    parse_mode="HTML",
                 )
                 # Дублируем заказ всем водителям, которые вышли на смену, в личные сообщения
                 for driver_tg_id in list(online_drivers):
@@ -2049,6 +2054,7 @@ async def finalize_order(
                             chat_id=driver_tg_id,
                             text=driver_msg,
                             reply_markup=keyboards.get_accept_order_keyboard(order_id),
+                            parse_mode="HTML",
                         )
                     except Exception as e:
                         logger.error(f"Не удалось отправить заказ водителю {driver_tg_id}: {e}")
@@ -2136,15 +2142,14 @@ async def eta_select_callback(callback: CallbackQuery, state: FSMContext):
             try:
                 route_text = _format_route_from_values(order.get("from_address"), order.get("to_address"))
                 card_text = (
-                    f"🚕 **Вы приняли заказ #{order_id}**\n\n"
-                    f"📍 Адрес: {order.get('from_address', '—')}\n"
-                    f"👤 Телефон клиента: {order.get('client_phone', 'не указан')}\n\n"
-                    f"{route_text}"
-                    + (f"\n💬 Примечание: {order.get('comment')}" if order.get('comment') else "\n💬 Примечание: Нет")
+                    f"🚕 <b>Вы приняли заказ #{order_id}</b>\n\n"
+                    f"<b>{route_text}</b>"
+                    + (f"\n\n💬 <b>Примечание:</b>\n    {order.get('comment')}" if order.get('comment') else "")
                 )
                 await callback.bot.send_message(
                     chat_id=driver_telegram_id,
                     text=card_text,
+                    parse_mode="HTML",
                     reply_markup=keyboards.get_driver_accept_keyboard(
                         order_id,
                         order["from_address"],
@@ -2351,8 +2356,9 @@ async def complete_order_callback(callback: CallbackQuery, state: FSMContext):
             await state.set_state(DriverShift.waiting_for_district)
             await callback.bot.send_message(
                 chat_id=callback.from_user.id,
-                text="Выберите вашу текущую локацию (стоянку):",
+                text="<b>Выберите вашу текущую локацию (стоянку):</b>",
                 reply_markup=keyboards.get_driver_districts_keyboard(),
+                parse_mode="HTML",
             )
         else:
             # Попробуем достать detail
@@ -2668,8 +2674,9 @@ async def at_place_callback(callback: CallbackQuery, state: FSMContext):
             try:
                 await callback.message.edit_text(
                     f"🚕 Вы на месте по заказу #{order_id}.\n\n"
-                    "Ожидаем клиента. Нажмите 'Начать поездку', когда он сядет в машину.",
+                    "<b>Ожидаем клиента. Нажмите «Начать поездку», когда он сядет в машину.</b>",
                     reply_markup=keyboards.get_at_place_driver_keyboard(order_id, client_chat_id),
+                    parse_mode="HTML",
                 )
             except Exception:
                 pass
@@ -2926,9 +2933,10 @@ async def start_trip_callback(callback: CallbackQuery, state: FSMContext):
 
             try:
                 await callback.message.edit_text(
-                    "🚕 ПОЕЗДКА НАЧАТА.\n\n"
+                    "<b>🚕 ПОЕЗДКА НАЧАТА.</b>\n\n"
                     "Ожидайте указаний по маршруту и следуйте к точке назначения.",
                     reply_markup=keyboards.get_in_progress_driver_keyboard(order_id, to_address),
+                    parse_mode="HTML",
                 )
             except Exception:
                 pass
