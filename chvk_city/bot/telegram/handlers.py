@@ -2173,11 +2173,13 @@ async def eta_select_callback(callback: CallbackQuery, state: FSMContext):
             except Exception:
                 pass
 
-            # Карточка заказа в личку водителю (адрес, телефон)
+            # Карточка заказа в личку водителю
             try:
                 route_text = _format_route_from_values(order.get("from_address"), order.get("to_address"))
+                client_name = order.get("client_name") or "Клиент"
                 card_text = (
                     f"🚕 <b>Вы приняли заказ #{order_id}</b>\n\n"
+                    f"👤 <b>Клиент:</b> {client_name}\n\n"
                     f"<b>{route_text}</b>"
                     + (f"\n\n💬 <b>Примечание:</b>\n    {order.get('comment')}" if order.get('comment') else "")
                 )
@@ -2188,7 +2190,6 @@ async def eta_select_callback(callback: CallbackQuery, state: FSMContext):
                     reply_markup=keyboards.get_driver_accept_keyboard(
                         order_id,
                         order["from_address"],
-                        client_phone=order.get("client_phone"),
                         client_telegram_id=order.get("client_telegram_id"),
                     ),
                 )

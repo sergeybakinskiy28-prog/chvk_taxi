@@ -123,6 +123,8 @@ STREET_TO_ZONE: dict[str, list[str]] = {
     ],
     "Садовка": [
         "садовка", "садов",
+        "антропова", "южная", "полевая", "луговая", "зеленая", "зелёная",
+        "колхозная", "совхозная", "дачная", "огородная",
     ],
     "Нагорный": [
         "нагорн", "полигон", "испыта", "артиллерий",
@@ -331,12 +333,13 @@ def get_zone_by_coords(lon: float, lat: float) -> str | None:
             if zone_normal and zone_swapped:
                 break
 
+        result = zone_normal or zone_swapped
         print(
             f"[GEO] Coords: lon={lon:.5f}, lat={lat:.5f} | "
-            f"Zone(normal)={zone_normal!r} | Zone(swapped)={zone_swapped!r}",
+            f"Zone(normal)={zone_normal!r} | Zone(swapped)={zone_swapped!r} | Result={result!r}",
             flush=True,
         )
-        return zone_normal
+        return result
     except Exception as e:
         print(f"[GEO] Ошибка point-in-polygon: {e}", flush=True)
     return None

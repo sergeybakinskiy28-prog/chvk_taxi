@@ -245,7 +245,7 @@ def get_driver_accept_keyboard(
 ) -> InlineKeyboardMarkup:
     """
     Клавиатура для водителя сразу после принятия заказа.
-    Порядок: Маршрут → Я на месте → Написать клиенту → Позвонить клиенту → Отменить.
+    Порядок: Маршрут → Я на месте → Написать клиенту → Отменить.
     """
     from_url = _yandex_route(from_address)
     buttons: list[list[InlineKeyboardButton]] = [
@@ -255,8 +255,6 @@ def get_driver_accept_keyboard(
     ]
     if client_telegram_id:
         buttons.insert(2, [InlineKeyboardButton(text="💬 Написать клиенту", url=f"tg://user?id={client_telegram_id}")])
-    if client_phone:
-        buttons.insert(2, [InlineKeyboardButton(text="📞 Позвонить клиенту", callback_data=f"driver_call_{order_id}")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def get_admin_approval_keyboard(driver_id: int):
