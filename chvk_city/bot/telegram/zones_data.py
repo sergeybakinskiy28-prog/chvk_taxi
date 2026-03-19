@@ -138,6 +138,27 @@ STREET_TO_ZONE: dict[str, list[str]] = {
 }
 
 # ---------------------------------------------------------------------------
+# Словарь популярных мест (POI)
+# Добавляйте новые точки самостоятельно — бот не будет обращаться к Яндексу.
+# Формат ключей: строчные слова/фразы, которые вводит пользователь.
+# Координаты: lon (долгота), lat (широта).
+# ---------------------------------------------------------------------------
+POPULAR_PLACES: dict[str, dict] = {
+    "озон":       {"display": "Склад Озон", "lon": 49.745706, "lat": 52.960590, "zone": "Озон"},
+    "ozon":       {"display": "Склад Озон", "lon": 49.745706, "lat": 52.960590, "zone": "Озон"},
+    "склад озон": {"display": "Склад Озон", "lon": 49.745706, "lat": 52.960590, "zone": "Озон"},
+    "на озон":    {"display": "Склад Озон", "lon": 49.745706, "lat": 52.960590, "zone": "Озон"},
+}
+
+
+def get_poi(address: str) -> dict | None:
+    """Ищет адрес в словаре популярных мест. Возвращает dict с display/lon/lat/zone или None."""
+    if not address:
+        return None
+    return POPULAR_PLACES.get(address.lower().strip())
+
+
+# ---------------------------------------------------------------------------
 # Матрица цен — СТРОГО направленная: (from, to) -> цена
 # Не используй симметричный fallback для этой таблицы!
 # ---------------------------------------------------------------------------
@@ -355,8 +376,14 @@ async def get_zone_by_address_geocoded(address: str) -> str | None:
       5. Логирует итоговую зону.
     """
     original = (address or "").strip()
-    full_address = _CITY_PREFIX + original
 
+    # Проверяем POI — если адрес известен, сразу возвращаем зону без запроса в Яндекс
+    poi = get_poi(original)
+    if poi:
+        print(f"[GEO] POI: {original!r} → zone={poi['zone']!r}, coords=({poi['lon']}, {poi['lat']})", flush=True)
+        return poi["zone"]
+
+    full_address = _CITY_PREFIX + original
     print(f"[GEO] Исходный адрес: {original!r}", flush=True)
     print(f"[GEO] Запрос в Яндекс: {full_address!r}", flush=True)
 
