@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(powershell -ExecutionPolicy Bypass -File upd.ps1 \"auto-update\")"
     ]
   }
 }
