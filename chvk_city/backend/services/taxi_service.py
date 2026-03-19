@@ -138,7 +138,7 @@ class TaxiService:
             )
             .where(
                 Order.user_id == user.id,
-                Order.status == "completed",
+                Order.status != "cancelled",
                 address_column.is_not(None),
                 address_column != "",
             )
