@@ -128,9 +128,13 @@ async def process_to_address(message: Message, state: FSMContext):
     prev_msg_ids = data.get("msg_to_delete", [])
     edit_id = data.get("route_message_id") or (prev_msg_ids[-1] if prev_msg_ids else None)
     to_zone = await get_zone_by_address_geocoded(to_address)
+    to_zones = list(data.get("to_zones") or [])
+    to_zones.append(to_zone)
+    zone_updates: dict = {"to_zones": to_zones}
     if not data.get("destination_addresses"):
-        await state.update_data(to_zone=to_zone)
-    print(f"DEBUG ORDER: to_address='{to_address}', to_zone={to_zone!r} for user {message.from_user.id}", flush=True)
+        zone_updates["to_zone"] = to_zone
+    await state.update_data(**zone_updates)
+    print(f"DEBUG ORDER: to_address='{to_address}', to_zone={to_zone!r}, to_zones={to_zones} for user {message.from_user.id}", flush=True)
     try:
         await message.delete()
     except Exception:
@@ -521,11 +525,11 @@ def _estimate_order_price(data: dict) -> tuple[float, str | None]:
 
     all_addresses = [from_address] + destination_addresses
 
-    # Зоны, уже известные из геокодера (только для первой точки и первого назначения)
-    stored_zones: dict[int, str | None] = {
-        0: data.get("from_zone"),
-        1: data.get("to_zone") if len(destination_addresses) == 1 else None,
-    }
+    # Зоны из геокодера: from_zone для точки 0, to_zones[i] для точки i+1
+    to_zones_stored = data.get("to_zones") or []
+    stored_zones: dict[int, str | None] = {0: data.get("from_zone")}
+    for i, z in enumerate(to_zones_stored):
+        stored_zones[i + 1] = z
 
     total_legs = 0.0
     any_unrecognized = False
@@ -629,6 +633,9 @@ async def _begin_order_flow(
         destination_addresses=[],
         from_address=None,
         to_address=None,
+        from_zone=None,
+        to_zone=None,
+        to_zones=[],
         has_child_seat=False,
         has_pet=False,
         order_comment=None,
@@ -1688,13 +1695,15 @@ async def recent_from_callback(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_reply_markup(reply_markup=None)
     except Exception:
         pass
+    from_zone = await get_zone_by_address_geocoded(from_address)
     msg_list = data.get("msg_to_delete", [])
     msg_list.append(callback.message.message_id)
     await state.update_data(
         msg_to_delete=msg_list,
         from_address=from_address,
+        from_zone=from_zone,
     )
-    print(f"DEBUG ORDER: selected recent from_address='{from_address}' for user {callback.from_user.id}", flush=True)
+    print(f"DEBUG ORDER: selected recent from_address='{from_address}', from_zone={from_zone!r} for user {callback.from_user.id}", flush=True)
     await _delete_messages(callback.bot, callback.message.chat.id, msg_list)
     await state.update_data(msg_to_delete=[])
     await _prompt_for_to_address(callback.message, state, callback.from_user.id)
@@ -1714,6 +1723,13 @@ async def recent_to_callback(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_reply_markup(reply_markup=None)
     except Exception:
         pass
+    to_zone = await get_zone_by_address_geocoded(to_address)
+    to_zones = list(data.get("to_zones") or [])
+    to_zones.append(to_zone)
+    zone_updates: dict = {"to_zones": to_zones}
+    if not data.get("destination_addresses"):
+        zone_updates["to_zone"] = to_zone
+    await state.update_data(**zone_updates)
     await _save_destination_and_show_options(
         callback.message,
         state,
@@ -1799,6 +1815,9 @@ async def back_to_from_callback(callback: CallbackQuery, state: FSMContext):
         recent_from_addresses=recent,
         route_message_id=None,
         msg_to_delete=[msg_id],
+        from_zone=None,
+        to_zone=None,
+        to_zones=[],
     )
     await state.set_state(OrderTaxi.waiting_for_from_address)
 
@@ -1827,6 +1846,8 @@ async def back_to_to_address_callback(callback: CallbackQuery, state: FSMContext
         recent_to_addresses=recent,
         route_message_id=msg_id,
         msg_to_delete=[msg_id],
+        to_zone=None,
+        to_zones=[],
     )
     await state.set_state(OrderTaxi.waiting_for_to_address)
 
