@@ -2332,13 +2332,14 @@ async def cancel_order_callback(callback: CallbackQuery, state: FSMContext):
         await state.update_data(messages_to_delete=[])
         await state.clear()
         try:
-            await callback.message.edit_reply_markup(reply_markup=None)
-        except Exception:
+            await callback.message.delete()
+        except TelegramBadRequest:
             pass
-        await callback.message.answer(
-            "❌ Заказ отменен",
-            reply_markup=await _get_menu_for_user(callback.from_user.id),
+        sent = await callback.message.answer(
+            "Заказ отменен. Если вы хотите заказать такси снова, нажмите кнопку ниже.",
+            reply_markup=keyboards.get_start_order_inline_keyboard(),
         )
+        await state.update_data(last_menu_msg_id=sent.message_id)
         return
 
     order_id = int(state_order_id) if state_order_id is not None else int(raw_order_id)
@@ -2363,11 +2364,15 @@ async def cancel_order_callback(callback: CallbackQuery, state: FSMContext):
             await callback.answer("Заказ отменен ❌")
             try:
                 await callback.message.edit_text(
-                    f"❌ Заказ #{order_id} был отменен вами.",
+                    f"❌ Заказ #{order_id} был отменен вами.\n\nЕсли вы хотите заказать такси снова, нажмите кнопку ниже.",
                     reply_markup=keyboards.get_start_order_inline_keyboard(),
                 )
             except Exception:
-                pass
+                sent = await callback.message.answer(
+                    "Заказ отменен. Если вы хотите заказать такси снова, нажмите кнопку ниже.",
+                    reply_markup=keyboards.get_start_order_inline_keyboard(),
+                )
+                await state.update_data(last_menu_msg_id=sent.message_id)
         else:
             if state_order_id is None:
                 data = await state.get_data()
@@ -2381,13 +2386,14 @@ async def cancel_order_callback(callback: CallbackQuery, state: FSMContext):
                 await state.update_data(messages_to_delete=[])
                 await state.clear()
                 try:
-                    await callback.message.edit_reply_markup(reply_markup=None)
-                except Exception:
+                    await callback.message.delete()
+                except TelegramBadRequest:
                     pass
-                await callback.message.answer(
-                    "❌ Заказ отменен",
-                    reply_markup=await _get_menu_for_user(callback.from_user.id),
+                sent = await callback.message.answer(
+                    "Заказ отменен. Если вы хотите заказать такси снова, нажмите кнопку ниже.",
+                    reply_markup=keyboards.get_start_order_inline_keyboard(),
                 )
+                await state.update_data(last_menu_msg_id=sent.message_id)
                 await callback.answer()
                 return
             await callback.answer("Ошибка при отмене: заказ уже принят или не найден", show_alert=True)
