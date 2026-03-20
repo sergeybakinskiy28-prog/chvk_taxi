@@ -105,7 +105,7 @@ async def process_from_address(message: Message, state: FSMContext):
         pass
 
     # Запрашиваем подсказки из Яндекс
-    suggestions = await geocode_suggest(raw, n=5)
+    suggestions = await geocode_suggest(raw, n=4)
 
     if not suggestions:
         # Яндекс ничего не нашёл — fallback к старому geocode_full
@@ -182,7 +182,7 @@ async def process_to_address(message: Message, state: FSMContext):
         pass
 
     # Запрашиваем подсказки из Яндекс
-    suggestions = await geocode_suggest(raw, n=5)
+    suggestions = await geocode_suggest(raw, n=4)
 
     if not suggestions:
         # Яндекс ничего не нашёл — fallback к geocode_full
