@@ -2632,7 +2632,7 @@ async def finalize_order(
             if preorder_scheduled_at:
                 # ── ПРЕДЗАКАЗ: уведомляем клиента и планируем задачу ──
                 base_text = (
-                    f"🕐 <b>Предзаказ на {preorder_time_str} создан!</b>\n\n"
+                    f"🕐 Предзаказ на {preorder_time_str} создан!\n\n"
                     f"{route_vertical}"
                 )
                 if isinstance(calculated_price, (int, float)):
