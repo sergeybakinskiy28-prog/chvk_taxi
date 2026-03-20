@@ -288,3 +288,12 @@ async def admin_back_callback(callback: CallbackQuery):
         reply_markup=keyboards.get_admin_panel_inline_keyboard(),
     )
     await callback.answer()
+
+
+@admin_router.callback_query(F.data == "admin_to_main")
+async def admin_to_main_callback(callback: CallbackQuery):
+    await callback.message.edit_text(
+        "Привет! Я помогу вам заказать такси. Нажмите на кнопку ниже, чтобы начать.",
+        reply_markup=keyboards.get_start_order_inline_keyboard_admin(),
+    )
+    await callback.answer()
