@@ -30,6 +30,13 @@ async def startup():
             )
         except Exception:
             pass
+        # Migration: add scheduled_at column to orders if missing
+        try:
+            await conn.execute(
+                text("ALTER TABLE orders ADD COLUMN IF NOT EXISTS scheduled_at TIMESTAMP")
+            )
+        except Exception:
+            pass
 
 @app.get("/")
 async def root():

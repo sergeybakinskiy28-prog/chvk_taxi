@@ -575,13 +575,12 @@ async def geocode_full(address: str) -> dict:
 
 def _shorten_address(text: str) -> str:
     """
-    Убирает лишние административные уровни из адреса Яндекс.
-    Оставляет максимум 3 последних значимых части: Город/Район, Улица, Дом.
+    Убирает бюрократические слова из адреса Яндекс.
+    Оставляет 2–3 значимые части: Город/Объект + Улица + Дом.
     """
-    # Убираем заведомо лишние префиксы
-    noise = (
-        "Россия, ",
-        "Russia, ",
+    # 1. Убираем страну и федеральные округа (prefix-strip)
+    noise_prefixes = (
+        "Россия, ", "Russia, ",
         "Приволжский федеральный округ, ",
         "Центральный федеральный округ, ",
         "Северо-Западный федеральный округ, ",
@@ -591,15 +590,46 @@ def _shorten_address(text: str) -> str:
         "Дальневосточный федеральный округ, ",
         "Северо-Кавказский федеральный округ, ",
     )
-    for prefix in noise:
+    for prefix in noise_prefixes:
         if text.startswith(prefix):
             text = text[len(prefix):]
-            break  # только один федеральный округ
+            break
 
-    # Разбиваем на части и берём последние 3 (Область/Город, Улица, Дом)
+    # 2. Убираем мусорные слова-термины из всей строки
+    noise_words = (
+        "городской округ ",
+        "поселение ",
+        "муниципальный район ",
+        "имени И.А. Безрукова",
+        "имени И. А. Безрукова",
+    )
+    for w in noise_words:
+        text = text.replace(w, "")
+
+    # 3. Специальный случай: аэропорт Курумоч
+    if "Курумоч" in text:
+        # Убираем лишние части, оставляем "Самара, аэропорт Курумоч"
+        if "аэропорт" in text.lower():
+            return "Самара, аэропорт Курумоч"
+        # Посёлок или ж/д станция
+        parts = [p.strip() for p in text.split(",") if p.strip()]
+        return ", ".join(parts[-2:]) if len(parts) >= 2 else text.strip()
+
+    # 4. Убираем дублирующееся слово (напр. "Самара, Самара, ул. Ленина")
     parts = [p.strip() for p in text.split(",") if p.strip()]
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for p in parts:
+        key = p.lower()
+        if key not in seen:
+            deduped.append(p)
+            seen.add(key)
+    parts = deduped
+
+    # 5. Берём последние 2–3 части (Город + Улица + Дом)
     if len(parts) > 3:
         parts = parts[-3:]
+
     return ", ".join(parts)
 
 

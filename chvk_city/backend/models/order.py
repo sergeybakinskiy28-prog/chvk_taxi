@@ -15,3 +15,4 @@ class Order(Base):
     status: Mapped[str] = mapped_column(String(20), default="new") # new, accepted, at_place, completed, cancelled
     price: Mapped[float | None] = mapped_column(Float)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    scheduled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

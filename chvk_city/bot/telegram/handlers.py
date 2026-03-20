@@ -52,6 +52,9 @@ PENALTY_AMOUNT = 7.5
 OFFER_TIMEOUT_CITY = 20
 OFFER_TIMEOUT_INTERCITY = 40
 
+# order_id -> asyncio.Task (уведомление водителей при наступлении времени предзаказа)
+preorder_tasks: dict[int, asyncio.Task] = {}
+
 class OrderTaxi(StatesGroup):
     waiting_for_from_address = State()
     waiting_for_to_address = State()
@@ -801,11 +804,15 @@ def _build_final_summary_text(data: dict) -> str:
     if price_note:
         price_text += f"\n<i>{price_note}</i>"
 
+    preorder_str = data.get("preorder_time_str")
+    preorder_line = f"\n\n🕐 <b>Предзаказ на: {preorder_str}</b>" if preorder_str else ""
+
     return (
         "✅ <b>Итог заказа</b>\n\n"
         f"<b>{_format_route_vertical(from_address, destination_addresses)}</b>\n\n"
         f"🛠 Опции:\n{options_text}\n\n"
         f"💰 Стоимость: {price_text}"
+        f"{preorder_line}"
     )
 
 
@@ -874,6 +881,8 @@ async def _begin_order_flow(
         price_note=None,
         is_processing=False,
         order_id=None,
+        preorder_scheduled_at=None,
+        preorder_time_str=None,
     )
     await _prompt_for_from_address(target_message, state, user_id)
 
@@ -2168,6 +2177,42 @@ async def back_to_options_callback(callback: CallbackQuery, state: FSMContext):
     await state.set_state(OrderTaxi.waiting_for_options)
 
 
+@router.callback_query(F.data == "preorder_order", OrderTaxi.waiting_for_confirmation)
+async def preorder_order_callback(callback: CallbackQuery, state: FSMContext):
+    """Показывает клавиатуру выбора времени предзаказа."""
+    await callback.answer()
+    try:
+        await callback.message.edit_reply_markup(
+            reply_markup=keyboards.get_preorder_time_keyboard()
+        )
+    except Exception:
+        pass
+
+
+@router.callback_query(F.data.startswith("preorder_time:"), OrderTaxi.waiting_for_confirmation)
+async def preorder_time_callback(callback: CallbackQuery, state: FSMContext):
+    """Пользователь выбрал время предзаказа."""
+    minutes = int(callback.data.split(":")[1])
+    now = datetime.datetime.now(_SAMARA_TZ)
+    scheduled_at = now + datetime.timedelta(minutes=minutes)
+    scheduled_at_iso = scheduled_at.isoformat()
+    time_str = scheduled_at.strftime("%H:%M")
+
+    await state.update_data(preorder_scheduled_at=scheduled_at_iso, preorder_time_str=time_str)
+    await callback.answer(f"🕐 Предзаказ на {time_str}")
+
+    data = await state.get_data()
+    summary_data = {**data}
+    try:
+        await callback.message.edit_text(
+            _build_final_summary_text(summary_data),
+            reply_markup=keyboards.get_order_confirmation_keyboard(preorder_time_str=time_str),
+            parse_mode="HTML",
+        )
+    except Exception:
+        pass
+
+
 @router.callback_query(F.data == "toggle_child_seat", OrderTaxi.waiting_for_options)
 async def toggle_child_seat_callback(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
@@ -2238,18 +2283,19 @@ async def calculate_order_price_callback(callback: CallbackQuery, state: FSMCont
     calculated_price, price_note, is_intercity = await _estimate_order_price(data)
     await state.update_data(calculated_price=calculated_price, price_note=price_note, is_intercity=is_intercity)
     summary_data = {**data, "calculated_price": calculated_price, "price_note": price_note}
+    preorder_time_str = data.get("preorder_time_str")
     await callback.answer()
     summary_message_id = callback.message.message_id
     try:
         await callback.message.edit_text(
             _build_final_summary_text(summary_data),
-            reply_markup=keyboards.get_order_confirmation_keyboard(),
+            reply_markup=keyboards.get_order_confirmation_keyboard(preorder_time_str=preorder_time_str),
             parse_mode="HTML",
         )
     except Exception:
         sent = await callback.message.answer(
             _build_final_summary_text(summary_data),
-            reply_markup=keyboards.get_order_confirmation_keyboard(),
+            reply_markup=keyboards.get_order_confirmation_keyboard(preorder_time_str=preorder_time_str),
             parse_mode="HTML",
         )
         summary_message_id = sent.message_id
@@ -2368,6 +2414,37 @@ async def _offer_order_to_next(bot, order_id: int):
     offer_tasks[order_id] = task
 
 
+async def _preorder_notify_task(
+    bot, order_id: int, client_tg_id: int, driver_msg: str, is_intercity: bool, delay: float
+):
+    """Ждёт до времени предзаказа, затем уведомляет водителей."""
+    if delay > 0:
+        await asyncio.sleep(delay)
+    preorder_tasks.pop(order_id, None)
+    print(f"[PREORDER] Время пришло! Запускаем заказ #{order_id}", flush=True)
+    # Уведомляем клиента
+    try:
+        await bot.send_message(
+            chat_id=client_tg_id,
+            text=f"🔔 Ваш предзаказ #{order_id} запущен! Ищем водителя...",
+        )
+    except Exception as e:
+        logger.error(f"Preorder client notify error: {e}")
+    # Отправляем в чат водителей
+    try:
+        await bot.send_message(
+            settings.DRIVER_CHAT_ID,
+            driver_msg,
+            reply_markup=keyboards.get_accept_order_keyboard(order_id),
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.error(f"Preorder driver chat error: {e}")
+    # Запускаем очередь
+    pending_order_data[order_id] = {"driver_msg": driver_msg, "is_intercity": is_intercity}
+    asyncio.create_task(_offer_order_to_next(bot, order_id))
+
+
 async def finalize_order(
     message: Message,
     state: FSMContext,
@@ -2409,80 +2486,110 @@ async def finalize_order(
     calculated_price = data.get("calculated_price")
     route_vertical = _format_route_vertical(from_address, destination_addresses)
     passenger_telegram_id = requester_telegram_id or data.get("requester_telegram_id") or message.chat.id
+    preorder_scheduled_at = data.get("preorder_scheduled_at")
+    preorder_time_str = data.get("preorder_time_str")
 
     await state.update_data(is_processing=True)
 
     try:
-        response = await get_http_client().post(
-            "/taxi/order",
-            json={
-                "telegram_id": passenger_telegram_id,
-                "from_address": from_address,
-                "to_address": route_display,
-                "comment": final_comment,
-                "price": calculated_price,
-            }
-        )
+        order_payload: dict = {
+            "telegram_id": passenger_telegram_id,
+            "from_address": from_address,
+            "to_address": route_display,
+            "comment": final_comment,
+            "price": calculated_price,
+        }
+        if preorder_scheduled_at:
+            order_payload["scheduled_at"] = preorder_scheduled_at
+        response = await get_http_client().post("/taxi/order", json=order_payload)
             
         if response.status_code == 200:
             order = response.json()
             order_id = order['id']
             await state.update_data(order_id=order_id)
-            base_text = (
-                "✅ Заказ создан! Ищем водителя...\n\n"
-                f"{route_vertical}"
-            )
-            if isinstance(calculated_price, (int, float)):
-                base_text += f"\n\n💰 Стоимость: {calculated_price:.0f} руб."
-            if final_comment:
-                base_text += f"\n\n💬 Примечание: {final_comment}"
 
-            sent_msg = await message.answer(
-                base_text,
-                reply_markup=keyboards.get_order_manage_keyboard(order_id)
-            )
-
-            await add_to_messages_to_delete(state, sent_msg.message_id)
+            # Формируем сообщение водителям (используется и сразу, и для предзаказа)
             data = await state.get_data()
-            await state.update_data(
-                msg_to_delete=[sent_msg.message_id],
-                active_message_id=sent_msg.message_id,
-                main_card_id=sent_msg.message_id,
+            is_intercity = data.get("is_intercity", False)
+            driver_msg_header = (
+                f"🚕 <b>Новый заказ #{order_id}</b>"
+                + (f" 🕐 <i>(предзаказ на {preorder_time_str})</i>" if preorder_time_str else "")
+                + f"\n\n<b>{route_vertical}</b>"
             )
-            
-            # Отправка в чат водителей
-            driver_msg = (
-                f"🚕 <b>Новый заказ #{order_id}</b>\n\n"
-                f"<b>{route_vertical}</b>"
-            )
-            # Опции — только если выбраны
             _opts = []
             if data.get("has_child_seat"):
                 _opts.append("👶 Детское кресло")
             if data.get("has_pet"):
                 _opts.append("🐾 С питомцем")
+            driver_msg = driver_msg_header
             if _opts:
                 driver_msg += "\n\n" + "\n".join(_opts)
-            # Текстовый комментарий — только если введён, курсивом
             if data.get("order_comment"):
                 driver_msg += f"\n\n💬 <b>Комментарий:</b>\n<i>{data.get('order_comment')}</i>"
-            # Стоимость в конце
             if isinstance(calculated_price, (int, float)):
                 driver_msg += f"\n\n💰 Стоимость: <b>{calculated_price:.0f} руб.</b>"
 
-            try:
-                await message.bot.send_message(
-                    settings.DRIVER_CHAT_ID,
-                    driver_msg,
-                    reply_markup=keyboards.get_accept_order_keyboard(order_id),
-                    parse_mode="HTML",
+            if preorder_scheduled_at:
+                # ── ПРЕДЗАКАЗ: уведомляем клиента и планируем задачу ──
+                base_text = (
+                    f"🕐 <b>Предзаказ на {preorder_time_str} создан!</b>\n\n"
+                    f"{route_vertical}"
                 )
-            except Exception as e:
-                logger.error(f"Ошибка отправки в чат водителей ({settings.DRIVER_CHAT_ID}): {e}")
-            # Последовательная очередь: предлагаем заказ первому водителю в очереди
-            is_intercity = data.get("is_intercity", False)
-            pending_order_data[order_id] = {"driver_msg": driver_msg, "is_intercity": is_intercity}
-            asyncio.create_task(_offer_order_to_next(message.bot, order_id))
+                if isinstance(calculated_price, (int, float)):
+                    base_text += f"\n\n💰 Стоимость: {calculated_price:.0f} руб."
+                if final_comment:
+                    base_text += f"\n\n💬 Примечание: {final_comment}"
+
+                sent_msg = await message.answer(base_text, reply_markup=keyboards.get_order_manage_keyboard(order_id))
+                await state.update_data(
+                    msg_to_delete=[sent_msg.message_id],
+                    active_message_id=sent_msg.message_id,
+                    main_card_id=sent_msg.message_id,
+                )
+
+                # Планируем задачу на нужное время
+                now = datetime.datetime.now(_SAMARA_TZ)
+                scheduled_dt = datetime.datetime.fromisoformat(preorder_scheduled_at)
+                delay = max(0.0, (scheduled_dt - now).total_seconds())
+                print(f"[PREORDER] Заказ #{order_id} на {preorder_time_str}, delay={delay:.0f}s", flush=True)
+                task = asyncio.create_task(
+                    _preorder_notify_task(
+                        message.bot, order_id, passenger_telegram_id,
+                        driver_msg, is_intercity, delay,
+                    )
+                )
+                preorder_tasks[order_id] = task
+            else:
+                # ── ОБЫЧНЫЙ ЗАКАЗ: отправляем водителям сразу ──
+                base_text = (
+                    "✅ Заказ создан! Ищем водителя...\n\n"
+                    f"{route_vertical}"
+                )
+                if isinstance(calculated_price, (int, float)):
+                    base_text += f"\n\n💰 Стоимость: {calculated_price:.0f} руб."
+                if final_comment:
+                    base_text += f"\n\n💬 Примечание: {final_comment}"
+
+                sent_msg = await message.answer(base_text, reply_markup=keyboards.get_order_manage_keyboard(order_id))
+                await add_to_messages_to_delete(state, sent_msg.message_id)
+                await state.update_data(
+                    msg_to_delete=[sent_msg.message_id],
+                    active_message_id=sent_msg.message_id,
+                    main_card_id=sent_msg.message_id,
+                )
+
+                try:
+                    await message.bot.send_message(
+                        settings.DRIVER_CHAT_ID,
+                        driver_msg,
+                        reply_markup=keyboards.get_accept_order_keyboard(order_id),
+                        parse_mode="HTML",
+                    )
+                except Exception as e:
+                    logger.error(f"Ошибка отправки в чат водителей ({settings.DRIVER_CHAT_ID}): {e}")
+                pending_order_data[order_id] = {"driver_msg": driver_msg, "is_intercity": is_intercity}
+                asyncio.create_task(_offer_order_to_next(message.bot, order_id))
+
             # Снимаем состояние FSM, но оставляем order_id в data для мягкой отмены/обработки UI
             await state.set_state(None)
         else:

@@ -43,10 +43,19 @@ class TaxiService:
         to_address: str,
         comment: str | None = None,
         price: float | None = None,
+        scheduled_at=None,
     ) -> Order:
+        from datetime import datetime
         # Get user by telegram_id
         user = await TaxiService.get_or_create_user(db, telegram_id)
-        
+
+        sched = None
+        if scheduled_at:
+            try:
+                sched = datetime.fromisoformat(scheduled_at) if isinstance(scheduled_at, str) else scheduled_at
+            except Exception:
+                sched = None
+
         new_order = Order(
             user_id=user.id,
             from_address=from_address,
@@ -54,6 +63,7 @@ class TaxiService:
             comment=comment,
             status="new",
             price=price,
+            scheduled_at=sched,
         )
         db.add(new_order)
         try:

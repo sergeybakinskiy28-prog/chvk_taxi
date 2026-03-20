@@ -328,11 +328,29 @@ def get_order_options_keyboard(has_child_seat: bool = False, has_pet: bool = Fal
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def get_order_confirmation_keyboard():
+def get_order_confirmation_keyboard(preorder_time_str: str | None = None) -> InlineKeyboardMarkup:
+    confirm_text = (
+        f"🚖 Подтвердить предзаказ на {preorder_time_str}"
+        if preorder_time_str
+        else "🚖 Подтвердить заказ"
+    )
     buttons = [
-        [InlineKeyboardButton(text="🚖 Подтвердить заказ", callback_data="confirm_order_creation")],
+        [InlineKeyboardButton(text=confirm_text, callback_data="confirm_order_creation")],
+        [InlineKeyboardButton(text="🕐 Предзаказ (выбрать время)", callback_data="preorder_order")],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_options")],
         [InlineKeyboardButton(text="❌ Отменить заказ", callback_data="cancel_order_creation")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_preorder_time_keyboard() -> InlineKeyboardMarkup:
+    buttons = [
+        [InlineKeyboardButton(text="⏱ Через 30 мин", callback_data="preorder_time:30")],
+        [InlineKeyboardButton(text="⏱ Через 1 час",  callback_data="preorder_time:60")],
+        [InlineKeyboardButton(text="⏱ Через 2 часа", callback_data="preorder_time:120")],
+        [InlineKeyboardButton(text="⏱ Через 3 часа", callback_data="preorder_time:180")],
+        [InlineKeyboardButton(text="⏱ Через 6 часов", callback_data="preorder_time:360")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="back_to_options")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 

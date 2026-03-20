@@ -17,6 +17,7 @@ class OrderCreate(BaseModel):
     to_address: str
     comment: str | None = None
     price: float | None = None
+    scheduled_at: str | None = None
 
 class OrderAccept(BaseModel):
     order_id: int
@@ -499,6 +500,7 @@ async def create_order(order_data: OrderCreate, db: AsyncSession = Depends(get_d
         order_data.to_address,
         order_data.comment,
         order_data.price,
+        order_data.scheduled_at,
     )
     # Fetch user to get telegram_id for the response
     user_result = await db.execute(select(User).where(User.id == order.user_id))
