@@ -14,7 +14,7 @@ def get_user_menu(show_become_driver: bool = True, is_owner: bool = False) -> Re
         [KeyboardButton(text="🚖 Заказать такси")],
     ]
     if is_owner:
-        buttons.append([KeyboardButton(text="💎 УПРАВЛЕНИЕ")])
+        buttons.append([KeyboardButton(text="⚙️ Управление")])
     return ReplyKeyboardMarkup(
         keyboard=buttons,
         resize_keyboard=True,
@@ -32,7 +32,7 @@ def get_driver_main_menu(is_owner: bool = False) -> ReplyKeyboardMarkup:
         [KeyboardButton(text="💼 Кабинет водителя")],
     ]
     if is_owner:
-        buttons.append([KeyboardButton(text="💎 УПРАВЛЕНИЕ")])
+        buttons.append([KeyboardButton(text="⚙️ Управление")])
     return ReplyKeyboardMarkup(
         keyboard=buttons,
         resize_keyboard=True,
@@ -114,6 +114,15 @@ def get_back_to_menu_keyboard():
 
 def get_start_order_inline_keyboard():
     buttons = [[InlineKeyboardButton(text="🚖 Заказать такси", callback_data="start_order_inline")]]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_admin_panel_inline_keyboard():
+    """Inline-клавиатура главной страницы админ-панели."""
+    buttons = [
+        [InlineKeyboardButton(text="📋 Текущие заказы", callback_data="admin_current_orders")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back")],
+    ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def get_address_suggestions_keyboard(suggestions: list, addr_type: str) -> InlineKeyboardMarkup:

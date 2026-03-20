@@ -7,6 +7,7 @@ from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.types import BotCommand
 from chvk_city.backend.config import settings
 from chvk_city.bot.telegram.handlers import router
+from chvk_city.bot.telegram.admin_handlers import admin_router
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,7 @@ async def main():
             logger.error(f"DB async_session init check failed: {e}", exc_info=True)
             print(f"[WARN] DB check failed (driver registration may not work): {e}", flush=True)
 
+        dp.include_router(admin_router)
         dp.include_router(router)
 
         try:

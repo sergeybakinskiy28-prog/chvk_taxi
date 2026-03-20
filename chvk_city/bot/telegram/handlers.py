@@ -93,7 +93,7 @@ async def process_from_address(message: Message, state: FSMContext):
         "💼 Кабинет водителя",
         "🚗 Стать водителем",
         "⚙️ Админка",
-        "💎 УПРАВЛЕНИЕ",
+        "⚙️ Управление",
     }:
         await message.answer("Сейчас я жду адрес, пожалуйста, напишите его текстом.")
         return
@@ -170,7 +170,7 @@ async def process_to_address(message: Message, state: FSMContext):
         "💼 Кабинет водителя",
         "🚗 Стать водителем",
         "⚙️ Админка",
-        "💎 УПРАВЛЕНИЕ",
+        "⚙️ Управление",
     }:
         await message.answer("Сейчас я жду второй адрес, пожалуйста, напишите его текстом.")
         return
@@ -326,7 +326,7 @@ async def process_comment(message: Message, state: FSMContext):
         "💼 Кабинет водителя",
         "🚗 Стать водителем",
         "⚙️ Админка",
-        "💎 УПРАВЛЕНИЕ",
+        "⚙️ Управление",
     }:
         await message.answer("Сейчас я жду текст комментария к заказу.")
         return
@@ -1290,7 +1290,7 @@ async def _start_driver_registration(message: Message, state: FSMContext):
 
 @router.message(DriverRegistration.waiting_for_full_name, F.text)
 async def driver_reg_full_name(message: Message, state: FSMContext):
-    if message.text in {"🚕 Заказать такси", "🚖 Заказать такси", "🗂 Мои заказы", "📞 Поддержка", "🚗 Стать водителем", "💎 УПРАВЛЕНИЕ"}:
+    if message.text in {"🚕 Заказать такси", "🚖 Заказать такси", "🗂 Мои заказы", "📞 Поддержка", "🚗 Стать водителем", "⚙️ Управление"}:
         await state.clear()
         await message.answer("Регистрация отменена.", reply_markup=await _get_menu_for_user(message.from_user.id))
         return
@@ -1308,7 +1308,7 @@ async def driver_reg_full_name(message: Message, state: FSMContext):
 
 @router.message(DriverRegistration.waiting_for_car_info, F.text)
 async def driver_reg_car_info(message: Message, state: FSMContext):
-    if message.text in {"🚕 Заказать такси", "🚖 Заказать такси", "🗂 Мои заказы", "📞 Поддержка", "🚗 Стать водителем", "💎 УПРАВЛЕНИЕ"}:
+    if message.text in {"🚕 Заказать такси", "🚖 Заказать такси", "🗂 Мои заказы", "📞 Поддержка", "🚗 Стать водителем", "⚙️ Управление"}:
         await state.clear()
         await message.answer("Регистрация отменена.", reply_markup=await _get_menu_for_user(message.from_user.id))
         return
@@ -1493,25 +1493,6 @@ async def admin_panel_handler(message: Message, state: FSMContext):
         reply_markup=keyboards.get_admin_menu(),
     )
 
-
-@router.message(F.text == "💎 УПРАВЛЕНИЕ")
-async def owner_panel_handler(message: Message, state: FSMContext):
-    """
-    Панель владельца (OWNER_ID): отдельное меню управления.
-    """
-    if not _is_owner(message.from_user.id):
-        await _send_single_window(
-            state, message,
-            "⚠️ У вас нет доступа к панели владельца.",
-            reply_markup=await _get_menu_for_user(message.from_user.id),
-        )
-        return
-
-    await _send_single_window(
-        state, message,
-        "💎 Панель владельца. Выберите действие:",
-        reply_markup=keyboards.get_admin_keyboard(),
-    )
 
 
 @router.message(F.text == "👥 Водители в штате")
@@ -3791,7 +3772,7 @@ _ADMIN_SAFE_TEXTS = {
     "💼 Кабинет водителя",
     "🚗 Стать водителем",
     "⚙️ Админка",
-    "💎 УПРАВЛЕНИЕ",
+    "⚙️ Управление",
     "👥 Водители в штате",
     "📩 Новые заявки",
     "❌ Удалить водителя (по ID)",
