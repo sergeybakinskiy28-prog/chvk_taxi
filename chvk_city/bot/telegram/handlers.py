@@ -959,7 +959,7 @@ async def cmd_start(message: Message, state: FSMContext):
             ),
         )
         welcome = await message.answer(
-            "Привет! Я помогу вам быстро заказать такси. Нажмите на кнопку ниже, чтобы начать.",
+            "Привет! Я помогу вам быстро заказать такси. Нажмите на кнопку ниже, чтобы начать. Проверка связи: 777",
             reply_markup=keyboards.get_start_order_inline_keyboard(),
         )
         await state.update_data(
