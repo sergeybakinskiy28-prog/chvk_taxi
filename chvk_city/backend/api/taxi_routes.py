@@ -70,6 +70,7 @@ class DriverListItem(BaseModel):
     car_number: str
     current_district: str | None
     telegram_id: int | None = None
+    phone: str | None = None
 
 @router.post("/user/update_phone")
 async def update_user_phone(data: UserUpdatePhone, db: AsyncSession = Depends(get_db)):
@@ -173,6 +174,7 @@ async def get_pending_drivers(db: AsyncSession = Depends(get_db)):
                 car_number=driver.car_number,
                 current_district=driver.current_district,
                 telegram_id=user.telegram_id,
+                phone=user.phone,
             )
         )
     return items
@@ -199,6 +201,7 @@ async def get_all_drivers(db: AsyncSession = Depends(get_db)):
                 car_number=driver.car_number,
                 current_district=driver.current_district,
                 telegram_id=user.telegram_id,
+                phone=user.phone,
             )
         )
     return items

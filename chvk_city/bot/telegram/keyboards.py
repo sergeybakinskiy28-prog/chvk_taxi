@@ -131,8 +131,41 @@ def get_admin_panel_inline_keyboard():
     buttons = [
         [InlineKeyboardButton(text="📋 Текущие заказы", callback_data="admin_current_orders")],
         [InlineKeyboardButton(text="📦 Архив заказов", callback_data="admin_archive_page:0")],
+        [InlineKeyboardButton(text="🚕 Водители", callback_data="admin_drivers_menu")],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back")],
     ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_admin_drivers_menu_keyboard():
+    """Подменю управления водителями."""
+    buttons = [
+        [InlineKeyboardButton(text="✅ Действующие водители", callback_data="admin_drivers_active")],
+        [InlineKeyboardButton(text="📩 Заявки на регистрацию", callback_data="admin_drivers_requests")],
+        [InlineKeyboardButton(text="🏠 В меню управления", callback_data="admin_back")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_admin_driver_card_keyboard(driver_id: int) -> InlineKeyboardMarkup:
+    """Кнопка удаления под карточкой водителя."""
+    buttons = [[InlineKeyboardButton(text="❌ Удалить водителя", callback_data=f"admin_delete_driver:{driver_id}")]]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_admin_driver_confirm_keyboard(driver_id: int, name: str) -> InlineKeyboardMarkup:
+    """Кнопки подтверждения удаления водителя."""
+    safe_name = name[:20]
+    buttons = [
+        [InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"admin_confirm_delete:{driver_id}")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_drivers_active")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_admin_drivers_back_keyboard():
+    """Кнопка возврата к списку водителей."""
+    buttons = [[InlineKeyboardButton(text="⬅️ К списку водителей", callback_data="admin_drivers_active")]]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 

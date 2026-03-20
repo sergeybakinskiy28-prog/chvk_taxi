@@ -148,6 +148,131 @@ async def admin_archive_callback(callback: CallbackQuery):
     await callback.answer()
 
 
+@admin_router.callback_query(F.data == "admin_drivers_menu")
+async def admin_drivers_menu_callback(callback: CallbackQuery):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    await callback.message.edit_text(
+        "🚕 Управление водителями",
+        reply_markup=keyboards.get_admin_drivers_menu_keyboard(),
+    )
+    await callback.answer()
+
+
+@admin_router.callback_query(F.data == "admin_drivers_active")
+async def admin_drivers_active_callback(callback: CallbackQuery):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+
+    await callback.answer()
+
+    try:
+        resp = await get_http_client().get("/taxi/drivers/all")
+        drivers = resp.json() if resp.status_code == 200 else []
+    except Exception:
+        drivers = []
+
+    if not drivers:
+        await callback.message.edit_text(
+            "🚕 Действующих водителей нет.",
+            reply_markup=keyboards.get_admin_drivers_menu_keyboard(),
+        )
+        return
+
+    # Отправляем отдельную карточку на каждого водителя (редактируем первое, остальные новые)
+    text_header = f"🚕 <b>Действующие водители</b> ({len(drivers)}):"
+    await callback.message.edit_text(text_header, reply_markup=None, parse_mode="HTML")
+
+    for d in drivers:
+        tg_id = d.get("telegram_id")
+        name = d.get("name") or "—"
+        phone = d.get("phone") or "—"
+        car = f"{d.get('car_model', '')} {d.get('car_number', '')}".strip() or "—"
+        district = d.get("current_district") or "—"
+        profile = f'<a href="tg://user?id={tg_id}">Профиль в TG</a>' if tg_id else "—"
+
+        card = (
+            f"👤 <b>{name}</b>\n"
+            f"📞 Тел: {phone}\n"
+            f"🚗 Машина: {car}\n"
+            f"📍 Район: {district}\n"
+            f"🔗 {profile}"
+        )
+        await callback.message.answer(
+            card,
+            reply_markup=keyboards.get_admin_driver_card_keyboard(d["id"]),
+            parse_mode="HTML",
+        )
+
+    await callback.message.answer(
+        "⬆️ Список водителей",
+        reply_markup=keyboards.get_admin_drivers_menu_keyboard(),
+    )
+
+
+@admin_router.callback_query(F.data == "admin_drivers_requests")
+async def admin_drivers_requests_callback(callback: CallbackQuery):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    await callback.answer("В разработке", show_alert=True)
+
+
+@admin_router.callback_query(F.data.startswith("admin_delete_driver:"))
+async def admin_delete_driver_callback(callback: CallbackQuery):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+
+    driver_id = int(callback.data.split(":")[1])
+
+    # Получаем имя водителя через список
+    try:
+        resp = await get_http_client().get("/taxi/drivers/all")
+        drivers = resp.json() if resp.status_code == 200 else []
+    except Exception:
+        drivers = []
+
+    driver = next((d for d in drivers if d["id"] == driver_id), None)
+    name = driver.get("name") or "водителя" if driver else "водителя"
+
+    await callback.message.edit_text(
+        f"⚠️ Вы уверены, что хотите лишить <b>{name}</b> прав водителя?",
+        reply_markup=keyboards.get_admin_driver_confirm_keyboard(driver_id, name),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@admin_router.callback_query(F.data.startswith("admin_confirm_delete:"))
+async def admin_confirm_delete_callback(callback: CallbackQuery):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+
+    driver_id = int(callback.data.split(":")[1])
+
+    try:
+        resp = await get_http_client().post(f"/taxi/driver/{driver_id}/reject")
+        success = resp.status_code == 200
+    except Exception:
+        success = False
+
+    if success:
+        await callback.message.edit_text(
+            "✅ Водитель удалён из системы.",
+            reply_markup=keyboards.get_admin_drivers_back_keyboard(),
+        )
+    else:
+        await callback.message.edit_text(
+            "❌ Не удалось удалить водителя. Попробуйте снова.",
+            reply_markup=keyboards.get_admin_drivers_back_keyboard(),
+        )
+    await callback.answer()
+
+
 @admin_router.callback_query(F.data == "admin_archive_noop")
 async def admin_archive_noop(callback: CallbackQuery):
     await callback.answer()
