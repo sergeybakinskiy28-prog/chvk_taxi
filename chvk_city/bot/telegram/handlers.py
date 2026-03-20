@@ -21,6 +21,10 @@ from chvk_city.bot.telegram.zones_data import (
     get_zone_price,
     get_ride_minutes,
     get_poi,
+    geocode_full,
+    get_driving_distance_km,
+    INTERCITY_RATE_PER_KM,
+    INTERCITY_NOTE,
     DEFAULT_ZONE_PRICE,
     DEFAULT_PRICE_NOTE,
 )
@@ -83,8 +87,10 @@ async def process_from_address(message: Message, state: FSMContext):
         return
     data = await state.get_data()
     prev_msg_ids = data.get("msg_to_delete", [])
-    from_zone = await get_zone_by_address_geocoded(from_address)
-    await state.update_data(from_address=from_address, from_zone=from_zone)
+    geo = await geocode_full(from_address)
+    from_zone = geo["zone"]
+    from_coords = [geo["lon"], geo["lat"]] if geo["lon"] is not None else None
+    await state.update_data(from_address=from_address, from_zone=from_zone, from_coords=from_coords)
     try:
         await message.delete()
     except Exception:
@@ -128,14 +134,18 @@ async def process_to_address(message: Message, state: FSMContext):
     data = await state.get_data()
     prev_msg_ids = data.get("msg_to_delete", [])
     edit_id = data.get("route_message_id") or (prev_msg_ids[-1] if prev_msg_ids else None)
-    to_zone = await get_zone_by_address_geocoded(to_address)
+    geo = await geocode_full(to_address)
+    to_zone = geo["zone"]
+    to_coord = [geo["lon"], geo["lat"]] if geo["lon"] is not None else None
     to_zones = list(data.get("to_zones") or [])
     to_zones.append(to_zone)
-    zone_updates: dict = {"to_zones": to_zones}
+    to_coords_list = list(data.get("to_coords_list") or [])
+    to_coords_list.append(to_coord)
+    zone_updates: dict = {"to_zones": to_zones, "to_coords_list": to_coords_list}
     if not data.get("destination_addresses"):
         zone_updates["to_zone"] = to_zone
     await state.update_data(**zone_updates)
-    print(f"DEBUG ORDER: to_address='{to_address}', to_zone={to_zone!r}, to_zones={to_zones} for user {message.from_user.id}", flush=True)
+    print(f"DEBUG ORDER: to_address='{to_address}', to_zone={to_zone!r}, coords={to_coord} for user {message.from_user.id}", flush=True)
     try:
         await message.delete()
     except Exception:
@@ -534,47 +544,81 @@ def _night_surcharge_per_segment() -> float:
     return 0.0
 
 
-def _estimate_order_price(data: dict) -> tuple[float, str | None]:
+async def _estimate_order_price(data: dict) -> tuple[float, str | None]:
     """
     Рассчитывает стоимость маршрута по сегментам: A→B + B→C + ...
-    Каждый сегмент — отдельная цена из ZONE_PRICES + ночная надбавка.
-    Если хотя бы один сегмент не распознан — добавляется примечание.
+    Каждый сегмент — цена из ZONE_PRICES или загородный тариф (28₽/км) + ночная надбавка.
     """
     from_address = data.get("from_address") or ""
     destination_addresses = data.get("destination_addresses") or []
-
     all_addresses = [from_address] + destination_addresses
 
-    # Зоны из геокодера: from_zone для точки 0, to_zones[i] для точки i+1
+    # Зоны из геокодера
     to_zones_stored = data.get("to_zones") or []
     stored_zones: dict[int, str | None] = {0: data.get("from_zone")}
     for i, z in enumerate(to_zones_stored):
         stored_zones[i + 1] = z
 
+    # Координаты из геокодера
+    to_coords_stored = data.get("to_coords_list") or []
+    stored_coords: dict[int, list | None] = {0: data.get("from_coords")}
+    for i, c in enumerate(to_coords_stored):
+        stored_coords[i + 1] = c
+
     night_surcharge = _night_surcharge_per_segment()
     total_legs = 0.0
     any_unrecognized = False
+    any_intercity = False
 
     for i in range(len(all_addresses) - 1):
         zone_a = _zone_for_address(all_addresses[i],     stored_zones.get(i))
         zone_b = _zone_for_address(all_addresses[i + 1], stored_zones.get(i + 1))
-        leg_price, recognized = get_zone_price(zone_a, zone_b)
-        leg_total = leg_price + night_surcharge
-        print(
-            f"[PRICE] Сегмент {i+1}: '{all_addresses[i]}' ({zone_a}) → "
-            f"'{all_addresses[i+1]}' ({zone_b}) = {leg_price}₽"
-            + (f" +{night_surcharge:.0f}₽ ночь" if night_surcharge else "")
-            + f" (recognized={recognized})",
-            flush=True,
-        )
-        if not recognized:
-            any_unrecognized = True
-        total_legs += leg_total
+
+        if zone_a is None or zone_b is None:
+            # Загородный тариф
+            coords_a = stored_coords.get(i)
+            coords_b = stored_coords.get(i + 1)
+            if coords_a and coords_b:
+                dist_km = await get_driving_distance_km(
+                    coords_a[0], coords_a[1], coords_b[0], coords_b[1]
+                )
+                leg_price = round(dist_km * INTERCITY_RATE_PER_KM)
+                any_intercity = True
+                print(
+                    f"[PRICE] Сегмент {i+1} [загород]: '{all_addresses[i]}' ({zone_a}) → "
+                    f"'{all_addresses[i+1]}' ({zone_b}) — {dist_km:.1f} км × 28 = {leg_price}₽"
+                    + (f" +{night_surcharge:.0f}₽ ночь" if night_surcharge else ""),
+                    flush=True,
+                )
+            else:
+                leg_price = DEFAULT_ZONE_PRICE
+                any_unrecognized = True
+                print(f"[PRICE] Сегмент {i+1}: нет координат → DEFAULT {leg_price}₽", flush=True)
+        else:
+            leg_price, recognized = get_zone_price(zone_a, zone_b)
+            if not recognized:
+                any_unrecognized = True
+            print(
+                f"[PRICE] Сегмент {i+1}: '{all_addresses[i]}' ({zone_a}) → "
+                f"'{all_addresses[i+1]}' ({zone_b}) = {leg_price}₽"
+                + (f" +{night_surcharge:.0f}₽ ночь" if night_surcharge else "")
+                + f" (recognized={recognized})",
+                flush=True,
+            )
+
+        total_legs += leg_price + night_surcharge
 
     child_seat_price = 48.0 if data.get("has_child_seat") else 0.0
     pet_price = 48.0 if data.get("has_pet") else 0.0
     total = total_legs + child_seat_price + pet_price
-    price_note = DEFAULT_PRICE_NOTE if any_unrecognized else None
+
+    if any_intercity:
+        price_note = INTERCITY_NOTE
+    elif any_unrecognized:
+        price_note = DEFAULT_PRICE_NOTE
+    else:
+        price_note = None
+
     return total, price_note
 
 
@@ -658,8 +702,10 @@ async def _begin_order_flow(
         from_address=None,
         to_address=None,
         from_zone=None,
+        from_coords=None,
         to_zone=None,
         to_zones=[],
+        to_coords_list=[],
         has_child_seat=False,
         has_pet=False,
         order_comment=None,
@@ -1719,13 +1765,16 @@ async def recent_from_callback(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_reply_markup(reply_markup=None)
     except Exception:
         pass
-    from_zone = await get_zone_by_address_geocoded(from_address)
+    geo = await geocode_full(from_address)
+    from_zone = geo["zone"]
+    from_coords = [geo["lon"], geo["lat"]] if geo["lon"] is not None else None
     msg_list = data.get("msg_to_delete", [])
     msg_list.append(callback.message.message_id)
     await state.update_data(
         msg_to_delete=msg_list,
         from_address=from_address,
         from_zone=from_zone,
+        from_coords=from_coords,
     )
     print(f"DEBUG ORDER: selected recent from_address='{from_address}', from_zone={from_zone!r} for user {callback.from_user.id}", flush=True)
     await _delete_messages(callback.bot, callback.message.chat.id, msg_list)
@@ -1747,10 +1796,14 @@ async def recent_to_callback(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_reply_markup(reply_markup=None)
     except Exception:
         pass
-    to_zone = await get_zone_by_address_geocoded(to_address)
+    geo = await geocode_full(to_address)
+    to_zone = geo["zone"]
+    to_coord = [geo["lon"], geo["lat"]] if geo["lon"] is not None else None
     to_zones = list(data.get("to_zones") or [])
     to_zones.append(to_zone)
-    zone_updates: dict = {"to_zones": to_zones}
+    to_coords_list = list(data.get("to_coords_list") or [])
+    to_coords_list.append(to_coord)
+    zone_updates: dict = {"to_zones": to_zones, "to_coords_list": to_coords_list}
     if not data.get("destination_addresses"):
         zone_updates["to_zone"] = to_zone
     await state.update_data(**zone_updates)
@@ -1840,8 +1893,10 @@ async def back_to_from_callback(callback: CallbackQuery, state: FSMContext):
         route_message_id=None,
         msg_to_delete=[msg_id],
         from_zone=None,
+        from_coords=None,
         to_zone=None,
         to_zones=[],
+        to_coords_list=[],
     )
     await state.set_state(OrderTaxi.waiting_for_from_address)
 
@@ -1872,6 +1927,7 @@ async def back_to_to_address_callback(callback: CallbackQuery, state: FSMContext
         msg_to_delete=[msg_id],
         to_zone=None,
         to_zones=[],
+        to_coords_list=[],
     )
     await state.set_state(OrderTaxi.waiting_for_to_address)
 
@@ -1973,7 +2029,7 @@ async def calculate_order_price_callback(callback: CallbackQuery, state: FSMCont
     if not destination_addresses:
         await callback.answer("Сначала добавьте хотя бы один адрес назначения.", show_alert=True)
         return
-    calculated_price, price_note = _estimate_order_price(data)
+    calculated_price, price_note = await _estimate_order_price(data)
     await state.update_data(calculated_price=calculated_price, price_note=price_note)
     summary_data = {**data, "calculated_price": calculated_price, "price_note": price_note}
     await callback.answer()

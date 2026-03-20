@@ -286,6 +286,13 @@ ZONE_RIDE_MINUTES: dict[tuple[str, str], int] = {
 }
 DEFAULT_RIDE_MINUTES = 15
 
+# ---------------------------------------------------------------------------
+# Загородный тариф
+# ---------------------------------------------------------------------------
+INTERCITY_RATE_PER_KM = 28.0          # ₽ за км
+INTERCITY_ROAD_FACTOR = 1.3           # коэффициент дороги (прямая → реальный путь)
+INTERCITY_NOTE = "🚕 Маршрут за пределами города. Расчет: 28 ₽/км"
+
 
 # ---------------------------------------------------------------------------
 # Публичные функции
@@ -459,6 +466,111 @@ def get_zone_by_address(address_text: str) -> str | None:
             if kw in cleaned:
                 return zone
     return None
+
+
+def haversine_km(lon1: float, lat1: float, lon2: float, lat2: float) -> float:
+    """Прямое расстояние между двумя точками WGS-84 (км)."""
+    from math import radians, sin, cos, sqrt, atan2
+    R = 6371.0
+    dlat = radians(lat2 - lat1)
+    dlon = radians(lon2 - lon1)
+    a = sin(dlat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon / 2) ** 2
+    return R * 2 * atan2(sqrt(a), sqrt(1 - a))
+
+
+async def get_driving_distance_km(lon1: float, lat1: float, lon2: float, lat2: float) -> float:
+    """
+    Получает расстояние по дороге через Yandex Router API.
+    При ошибке — Haversine × INTERCITY_ROAD_FACTOR.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(
+                "https://api.routing.yandex.net/v2/route",
+                params={
+                    "apikey": YANDEX_GEOCODER_API_KEY,
+                    "waypoints": f"{lon1},{lat1}|{lon2},{lat2}",
+                    "mode": "driving",
+                },
+            )
+        if resp.status_code == 200:
+            rdata = resp.json()
+            legs = rdata.get("route", {}).get("legs", [])
+            total_m = sum(
+                step.get("length", {}).get("value", 0)
+                for leg in legs
+                for step in leg.get("steps", [])
+            )
+            if total_m > 0:
+                km = total_m / 1000.0
+                print(f"[GEO] Yandex Router: {km:.1f} км", flush=True)
+                return km
+    except Exception as e:
+        print(f"[GEO] Yandex Router error ({type(e).__name__}): {e}", flush=True)
+
+    # Fallback: Haversine × 1.3
+    km = haversine_km(lon1, lat1, lon2, lat2) * INTERCITY_ROAD_FACTOR
+    print(f"[GEO] Haversine fallback: {km:.1f} км", flush=True)
+    return km
+
+
+async def geocode_full(address: str) -> dict:
+    """
+    Полное геокодирование: возвращает {"zone": str|None, "lon": float|None, "lat": float|None}.
+    Порядок: POI → Яндекс + полигоны → ключевые слова.
+    """
+    original = (address or "").strip()
+
+    # POI
+    poi = get_poi(original)
+    if poi:
+        print(f"[GEO] geocode_full POI: {original!r} → {poi['zone']!r}", flush=True)
+        return {"zone": poi["zone"], "lon": poi["lon"], "lat": poi["lat"]}
+
+    result: dict = {"zone": None, "lon": None, "lat": None}
+    full_address = _CITY_PREFIX + original
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(
+                "https://geocode-maps.yandex.ru/1.x/",
+                params={
+                    "apikey": YANDEX_GEOCODER_API_KEY,
+                    "geocode": full_address,
+                    "format": "json",
+                    "results": 1,
+                    "lang": "ru_RU",
+                },
+            )
+        resp.raise_for_status()
+        data = resp.json()
+        members = (
+            data.get("response", {})
+                .get("GeoObjectCollection", {})
+                .get("featureMember", [])
+        )
+        if members:
+            geo = members[0]["GeoObject"]
+            pos = geo.get("Point", {}).get("pos", "")
+            parts = pos.split()
+            if len(parts) >= 2:
+                lon, lat = float(parts[0]), float(parts[1])
+                result["lon"] = lon
+                result["lat"] = lat
+                zone = get_zone_by_coords(lon, lat)
+                if zone is None:
+                    formatted = (
+                        geo.get("metaDataProperty", {})
+                           .get("GeocoderMetaData", {})
+                           .get("text", "")
+                    )
+                    zone = get_zone_by_address(formatted)
+                result["zone"] = zone
+                print(f"[GEO] geocode_full: {original!r} → zone={zone!r}, lon={lon:.5f}, lat={lat:.5f}", flush=True)
+    except Exception as e:
+        print(f"[GEO] geocode_full error ({type(e).__name__}): {e}", flush=True)
+        result["zone"] = get_zone_by_address(original)
+
+    return result
 
 
 def get_zone_price(from_zone: str | None, to_zone: str | None) -> tuple[float, bool]:
