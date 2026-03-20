@@ -671,6 +671,65 @@ async def get_active_orders(db: AsyncSession = Depends(get_db)):
     ]
 
 
+@router.get("/orders/archive")
+async def get_archive_orders(page: int = 0, page_size: int = 10, db: AsyncSession = Depends(get_db)):
+    """Архив завершённых/отменённых заказов с пагинацией для админ-панели."""
+    archive_statuses = ("completed", "cancelled")
+
+    ClientUser = User.__table__.alias("client_user")
+    DriverUser = User.__table__.alias("driver_user")
+
+    stmt = (
+        select(
+            Order,
+            ClientUser.c.telegram_id.label("client_tg_id"),
+            ClientUser.c.name.label("client_name"),
+            Driver.id.label("driver_id"),
+            Driver.car_model,
+            Driver.car_number,
+            DriverUser.c.telegram_id.label("driver_tg_id"),
+            DriverUser.c.name.label("driver_name"),
+            DriverUser.c.phone.label("driver_phone"),
+        )
+        .join(ClientUser, Order.user_id == ClientUser.c.id)
+        .outerjoin(Driver, Order.driver_id == Driver.id)
+        .outerjoin(DriverUser, Driver.user_id == DriverUser.c.id)
+        .where(Order.status.in_(archive_statuses))
+        .order_by(Order.created_at.desc())
+        .offset(page * page_size)
+        .limit(page_size + 1)  # +1 чтобы понять есть ли следующая страница
+    )
+    result = await db.execute(stmt)
+    rows = result.all()
+
+    has_next = len(rows) > page_size
+    rows = rows[:page_size]
+
+    return {
+        "page": page,
+        "has_next": has_next,
+        "orders": [
+            {
+                "id": row.Order.id,
+                "from_address": row.Order.from_address,
+                "to_address": row.Order.to_address,
+                "status": row.Order.status,
+                "price": row.Order.price,
+                "created_at": row.Order.created_at.strftime("%d.%m %H:%M") if row.Order.created_at else "—",
+                "scheduled_at": row.Order.scheduled_at.isoformat() if row.Order.scheduled_at else None,
+                "client_tg_id": row.client_tg_id,
+                "client_name": row.client_name,
+                "driver_tg_id": row.driver_tg_id,
+                "driver_name": row.driver_name,
+                "driver_phone": row.driver_phone,
+                "car_model": row.car_model,
+                "car_number": row.car_number,
+            }
+            for row in rows
+        ],
+    }
+
+
 @router.get("/orders/history/{user_id}", response_model=List[OrderHistoryItem])
 async def get_order_history(user_id: int, limit: int = 10, db: AsyncSession = Depends(get_db)):
     """

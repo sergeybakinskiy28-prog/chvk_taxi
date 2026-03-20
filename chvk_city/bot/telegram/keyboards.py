@@ -130,6 +130,7 @@ def get_admin_panel_inline_keyboard():
     """Inline-клавиатура главной страницы админ-панели."""
     buttons = [
         [InlineKeyboardButton(text="📋 Текущие заказы", callback_data="admin_current_orders")],
+        [InlineKeyboardButton(text="📦 Архив заказов", callback_data="admin_archive_page:0")],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -138,6 +139,18 @@ def get_admin_panel_inline_keyboard():
 def get_admin_back_keyboard():
     """Кнопка «⬅️ Назад» для подстраниц админ-панели."""
     buttons = [[InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back")]]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_admin_archive_keyboard(page: int, has_prev: bool, has_next: bool) -> InlineKeyboardMarkup:
+    """Клавиатура пагинации архива заказов."""
+    nav = []
+    if has_prev:
+        nav.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"admin_archive_page:{page - 1}"))
+    nav.append(InlineKeyboardButton(text=f"📄 Стр. {page + 1}", callback_data="admin_archive_noop"))
+    if has_next:
+        nav.append(InlineKeyboardButton(text="Вперёд ➡️", callback_data=f"admin_archive_page:{page + 1}"))
+    buttons = [nav, [InlineKeyboardButton(text="🏠 В меню управления", callback_data="admin_back")]]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def get_address_suggestions_keyboard(suggestions: list, addr_type: str) -> InlineKeyboardMarkup:
