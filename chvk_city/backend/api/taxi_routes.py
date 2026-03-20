@@ -32,6 +32,12 @@ class DriverRegister(BaseModel):
     car_model: str
     car_number: str
 
+class AdminAddDriver(BaseModel):
+    telegram_id: int
+    car_model: str
+    car_number: str
+    phone: str | None = None
+
 class UserUpdatePhone(BaseModel):
     telegram_id: int
     phone: str
@@ -161,7 +167,7 @@ async def get_pending_drivers(db: AsyncSession = Depends(get_db)):
     result = await db.execute(
         select(Driver, User)
         .join(User, Driver.user_id == User.id)
-        .where(Driver.is_approved.is_(False))
+        .where(Driver.is_approved.is_(False), Driver.deleted_at.is_(None))
     )
     rows = result.all()
     items: list[DriverListItem] = []
@@ -188,7 +194,7 @@ async def get_all_drivers(db: AsyncSession = Depends(get_db)):
     result = await db.execute(
         select(Driver, User)
         .join(User, Driver.user_id == User.id)
-        .where(Driver.is_approved.is_(True))
+        .where(Driver.is_approved.is_(True), Driver.deleted_at.is_(None))
     )
     rows = result.all()
     items: list[DriverListItem] = []
@@ -249,6 +255,55 @@ async def admin_delete_driver(tg_id: int, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Не удалось удалить водителя")
 
     return {"status": "deleted", "telegram_id": user.telegram_id, "name": driver_name}
+
+@router.post("/admin/add_driver")
+async def admin_add_driver(data: AdminAddDriver, db: AsyncSession = Depends(get_db)):
+    """Ручное добавление одобренного водителя администратором."""
+    user = await TaxiService.get_or_create_user(db, data.telegram_id)
+    if data.phone:
+        await TaxiService.update_user_phone(db, data.telegram_id, data.phone)
+    # Если водитель уже существует (в т.ч. мягко удалённый) — обновляем запись
+    result = await db.execute(select(Driver).where(Driver.user_id == user.id))
+    driver = result.scalar_one_or_none()
+    if driver:
+        driver.car_model = data.car_model
+        driver.car_number = data.car_number
+        driver.is_approved = True
+        driver.deleted_at = None
+        try:
+            await db.commit()
+            await db.refresh(driver)
+        except Exception:
+            await db.rollback()
+            raise
+    else:
+        driver = await TaxiService.register_driver(db, data.telegram_id, data.car_model, data.car_number)
+        await TaxiService.approve_driver(db, driver.id)
+    return {"status": "ok", "driver_id": driver.id, "telegram_id": data.telegram_id}
+
+
+@router.get("/drivers/deleted")
+async def get_deleted_drivers(db: AsyncSession = Depends(get_db)):
+    """Список мягко удалённых водителей."""
+    result = await db.execute(
+        select(Driver, User)
+        .join(User, Driver.user_id == User.id)
+        .where(Driver.deleted_at.is_not(None))
+        .order_by(Driver.deleted_at.desc())
+    )
+    rows = result.all()
+    return [
+        {
+            "id": driver.id,
+            "name": user.name,
+            "telegram_id": user.telegram_id,
+            "car_model": driver.car_model,
+            "car_number": driver.car_number,
+            "deleted_at": driver.deleted_at.strftime("%d.%m.%Y %H:%M") if driver.deleted_at else "—",
+        }
+        for driver, user in rows
+    ]
+
 
 @router.post("/driver/register")
 async def register_driver(driver_data: DriverRegister, db: AsyncSession = Depends(get_db)):

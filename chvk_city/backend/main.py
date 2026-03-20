@@ -37,6 +37,13 @@ async def startup():
             )
         except Exception:
             pass
+        # Migration: add deleted_at column to drivers if missing
+        try:
+            await conn.execute(
+                text("ALTER TABLE drivers ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP")
+            )
+        except Exception:
+            pass
 
 @app.get("/")
 async def root():

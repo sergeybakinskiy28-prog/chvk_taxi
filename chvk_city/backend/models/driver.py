@@ -17,6 +17,8 @@ class Driver(Base):
     current_district: Mapped[str | None] = mapped_column(String(50), nullable=True)
     # Баланс водителя (комиссии и штрафы)
     balance: Mapped[float] = mapped_column(Float, default=0.0)
+    # Дата мягкого удаления (soft-delete)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 class DriverStatus(Base):
     __tablename__ = "driver_statuses"

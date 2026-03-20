@@ -361,15 +361,12 @@ class TaxiService:
 
     @staticmethod
     async def reject_driver(db: AsyncSession, driver_id: int) -> bool:
-        from sqlalchemy import update as sa_update
+        from datetime import datetime as dt
         result = await db.execute(select(Driver).where(Driver.id == driver_id))
         driver = result.scalar_one_or_none()
         if driver:
-            # Обнуляем ссылки на водителя в заказах, чтобы не нарушить FK
-            await db.execute(
-                sa_update(Order).where(Order.driver_id == driver_id).values(driver_id=None)
-            )
-            await db.delete(driver)
+            driver.is_approved = False
+            driver.deleted_at = dt.utcnow()
             try:
                 await db.commit()
                 return True

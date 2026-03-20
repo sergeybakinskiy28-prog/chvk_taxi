@@ -141,8 +141,25 @@ def get_admin_drivers_menu_keyboard():
     """Подменю управления водителями."""
     buttons = [
         [InlineKeyboardButton(text="✅ Действующие водители", callback_data="admin_drivers_active")],
+        [InlineKeyboardButton(text="➕ Добавить водителя", callback_data="admin_add_driver_start")],
+        [InlineKeyboardButton(text="🗑 Удалённые водители", callback_data="admin_drivers_deleted")],
         [InlineKeyboardButton(text="📩 Заявки на регистрацию", callback_data="admin_drivers_requests")],
         [InlineKeyboardButton(text="🏠 В меню управления", callback_data="admin_back")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_admin_cancel_keyboard():
+    """Кнопка отмены для FSM-форм в админ-панели."""
+    buttons = [[InlineKeyboardButton(text="❌ Отмена", callback_data="admin_add_driver_cancel")]]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_admin_confirm_add_driver_keyboard():
+    """Подтверждение добавления водителя."""
+    buttons = [
+        [InlineKeyboardButton(text="✅ Добавить водителя", callback_data="admin_confirm_add_driver")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_add_driver_cancel")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 

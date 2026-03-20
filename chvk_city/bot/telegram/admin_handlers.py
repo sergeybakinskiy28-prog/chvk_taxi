@@ -1,5 +1,7 @@
 from aiogram import Router, F
 from aiogram.exceptions import TelegramBadRequest
+from aiogram.filters import StateFilter
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 
@@ -8,6 +10,14 @@ from chvk_city.bot.telegram import keyboards
 from chvk_city.bot.telegram.handlers import get_http_client
 
 admin_router = Router()
+
+
+class AdminAddDriver(StatesGroup):
+    waiting_for_tg_id = State()
+    waiting_for_car_model = State()
+    waiting_for_car_number = State()
+    waiting_for_phone = State()
+    waiting_for_confirm = State()
 
 STATUS_LABELS = {
     "new": "🟡 Ожидает",
@@ -344,3 +354,221 @@ async def admin_to_main_callback(callback: CallbackQuery):
         reply_markup=keyboards.get_start_order_inline_keyboard_admin(),
     )
     await callback.answer()
+
+
+# ── Добавить водителя (FSM) ──────────────────────────────────────────────────
+
+@admin_router.callback_query(F.data == "admin_add_driver_start")
+async def admin_add_driver_start(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    await state.set_state(AdminAddDriver.waiting_for_tg_id)
+    await callback.message.edit_text(
+        "➕ <b>Добавление водителя</b>\n\nШаг 1/4. Введите <b>Telegram ID</b> водителя (числовой):",
+        reply_markup=keyboards.get_admin_cancel_keyboard(),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@admin_router.message(StateFilter(AdminAddDriver.waiting_for_tg_id))
+async def admin_add_driver_tg_id(message: Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    text = (message.text or "").strip()
+    if not text.lstrip("-").isdigit():
+        await message.answer(
+            "❗ Введите числовой Telegram ID (например: 123456789).",
+            reply_markup=keyboards.get_admin_cancel_keyboard(),
+        )
+        return
+    await state.update_data(new_driver_tg_id=int(text))
+    await state.set_state(AdminAddDriver.waiting_for_car_model)
+    await message.answer(
+        "Шаг 2/4. Введите <b>марку автомобиля</b> (например: Toyota Camry):",
+        reply_markup=keyboards.get_admin_cancel_keyboard(),
+        parse_mode="HTML",
+    )
+
+
+@admin_router.message(StateFilter(AdminAddDriver.waiting_for_car_model))
+async def admin_add_driver_car_model(message: Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    car_model = (message.text or "").strip()
+    if not car_model:
+        await message.answer("❗ Введите марку автомобиля.", reply_markup=keyboards.get_admin_cancel_keyboard())
+        return
+    await state.update_data(new_driver_car_model=car_model)
+    await state.set_state(AdminAddDriver.waiting_for_car_number)
+    await message.answer(
+        "Шаг 3/4. Введите <b>номер автомобиля</b> (например: А123ВС159):",
+        reply_markup=keyboards.get_admin_cancel_keyboard(),
+        parse_mode="HTML",
+    )
+
+
+@admin_router.message(StateFilter(AdminAddDriver.waiting_for_car_number))
+async def admin_add_driver_car_number(message: Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    car_number = (message.text or "").strip()
+    if not car_number:
+        await message.answer("❗ Введите номер автомобиля.", reply_markup=keyboards.get_admin_cancel_keyboard())
+        return
+    await state.update_data(new_driver_car_number=car_number)
+    await state.set_state(AdminAddDriver.waiting_for_phone)
+    await message.answer(
+        "Шаг 4/4. Введите <b>номер телефона</b> водителя (или «—» чтобы пропустить):",
+        reply_markup=keyboards.get_admin_cancel_keyboard(),
+        parse_mode="HTML",
+    )
+
+
+@admin_router.message(StateFilter(AdminAddDriver.waiting_for_phone))
+async def admin_add_driver_phone(message: Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    phone = (message.text or "").strip()
+    if phone == "—" or phone == "-":
+        phone = None
+    await state.update_data(new_driver_phone=phone)
+    await state.set_state(AdminAddDriver.waiting_for_confirm)
+
+    data = await state.get_data()
+    tg_id = data["new_driver_tg_id"]
+    car_model = data["new_driver_car_model"]
+    car_number = data["new_driver_car_number"]
+    phone_line = phone or "не указан"
+
+    await message.answer(
+        f"📋 <b>Подтвердите данные водителя:</b>\n\n"
+        f"🆔 Telegram ID: <code>{tg_id}</code>\n"
+        f"🚗 Машина: {car_model}\n"
+        f"🔢 Номер: {car_number}\n"
+        f"📞 Телефон: {phone_line}",
+        reply_markup=keyboards.get_admin_confirm_add_driver_keyboard(),
+        parse_mode="HTML",
+    )
+
+
+@admin_router.callback_query(F.data == "admin_confirm_add_driver")
+async def admin_confirm_add_driver(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+
+    data = await state.get_data()
+    tg_id = data.get("new_driver_tg_id")
+    car_model = data.get("new_driver_car_model")
+    car_number = data.get("new_driver_car_number")
+    phone = data.get("new_driver_phone")
+
+    await state.clear()
+
+    try:
+        payload = {"telegram_id": tg_id, "car_model": car_model, "car_number": car_number}
+        if phone:
+            payload["phone"] = phone
+        resp = await get_http_client().post("/taxi/admin/add_driver", json=payload)
+        success = resp.status_code == 200
+    except Exception as e:
+        print(f"DEBUG: add_driver error: {e}", flush=True)
+        success = False
+
+    if success:
+        await callback.message.edit_text(
+            "✅ Водитель успешно добавлен и одобрен.",
+            reply_markup=keyboards.get_admin_drivers_menu_keyboard(),
+        )
+        try:
+            await callback.bot.send_message(
+                chat_id=tg_id,
+                text="🎉 Вы были добавлены в систему как водитель ЧВК Такси. Ваша заявка одобрена!",
+            )
+        except Exception:
+            pass
+    else:
+        await callback.message.edit_text(
+            "❌ Не удалось добавить водителя. Проверьте данные и попробуйте снова.",
+            reply_markup=keyboards.get_admin_drivers_menu_keyboard(),
+        )
+    await callback.answer()
+
+
+@admin_router.callback_query(F.data == "admin_add_driver_cancel")
+async def admin_add_driver_cancel(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer()
+        return
+    await state.clear()
+    try:
+        await callback.message.edit_text(
+            "🚕 Управление водителями",
+            reply_markup=keyboards.get_admin_drivers_menu_keyboard(),
+        )
+    except TelegramBadRequest:
+        await callback.message.answer(
+            "🚕 Управление водителями",
+            reply_markup=keyboards.get_admin_drivers_menu_keyboard(),
+        )
+    await callback.answer()
+
+
+# ── Удалённые водители ───────────────────────────────────────────────────────
+
+@admin_router.callback_query(F.data == "admin_drivers_deleted")
+async def admin_drivers_deleted_callback(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+
+    await callback.answer()
+    await _delete_driver_cards(callback.bot, callback.message.chat.id, state)
+
+    try:
+        resp = await get_http_client().get("/taxi/drivers/deleted")
+        drivers = resp.json() if resp.status_code == 200 else []
+    except Exception:
+        drivers = []
+
+    if not drivers:
+        await callback.message.edit_text(
+            "🗑 Удалённых водителей нет.",
+            reply_markup=keyboards.get_admin_drivers_menu_keyboard(),
+        )
+        return
+
+    text_header = f"🗑 <b>Удалённые водители</b> ({len(drivers)}):"
+    await callback.message.edit_text(text_header, reply_markup=None, parse_mode="HTML")
+
+    card_ids: list[int] = []
+    for d in drivers:
+        tg_id = d.get("telegram_id")
+        name = d.get("name") or "—"
+        phone = d.get("phone") or "—"
+        car = f"{d.get('car_model', '')} {d.get('car_number', '')}".strip() or "—"
+        deleted_at = d.get("deleted_at") or "—"
+        profile = f'<a href="tg://user?id={tg_id}">Профиль в TG</a>' if tg_id else "—"
+
+        card = (
+            f"👤 <b>{name}</b>\n"
+            f"📞 Тел: {phone}\n"
+            f"🚗 Машина: {car}\n"
+            f"🗑 Удалён: {deleted_at}\n"
+            f"🔗 {profile}"
+        )
+        sent = await callback.message.answer(card, parse_mode="HTML")
+        card_ids.append(sent.message_id)
+
+    footer = await callback.message.answer(
+        "⬆️ Список удалённых водителей",
+        reply_markup=keyboards.get_admin_drivers_menu_keyboard(),
+    )
+
+    card_ids.append(callback.message.message_id)
+    await state.update_data(
+        admin_driver_card_ids=card_ids,
+        admin_drivers_footer_id=footer.message_id,
+    )
