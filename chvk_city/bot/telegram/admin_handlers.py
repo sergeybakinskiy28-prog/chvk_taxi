@@ -356,7 +356,29 @@ async def admin_to_main_callback(callback: CallbackQuery):
     await callback.answer()
 
 
-# ── Добавить водителя (FSM) ──────────────────────────────────────────────────
+# ── Добавить водителя (FSM, single-window) ───────────────────────────────────
+
+_STEP_TEXTS = {
+    "tg_id":      "➕ <b>Добавление водителя</b>\n\nШаг 1/4. Введите <b>Telegram ID</b> водителя (числовой):",
+    "car_model":  "➕ <b>Добавление водителя</b>\n\nШаг 2/4. Введите <b>марку автомобиля</b>\n(например: Toyota Camry):",
+    "car_number": "➕ <b>Добавление водителя</b>\n\nШаг 3/4. Введите <b>номер автомобиля</b>\n(например: А123ВС159):",
+    "phone":      "➕ <b>Добавление водителя</b>\n\nШаг 4/4. Введите <b>номер телефона</b> водителя\n(или «—» чтобы пропустить):",
+}
+
+
+async def _edit_reg_msg(bot, chat_id: int, msg_id: int, text: str, reply_markup=None):
+    """Редактировать регистрационное сообщение, игнорируя 'message is not modified'."""
+    try:
+        await bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=msg_id,
+            text=text,
+            reply_markup=reply_markup,
+            parse_mode="HTML",
+        )
+    except TelegramBadRequest:
+        pass
+
 
 @admin_router.callback_query(F.data == "admin_add_driver_start")
 async def admin_add_driver_start(callback: CallbackQuery, state: FSMContext):
@@ -364,8 +386,9 @@ async def admin_add_driver_start(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Нет доступа", show_alert=True)
         return
     await state.set_state(AdminAddDriver.waiting_for_tg_id)
+    await state.update_data(registration_msg_id=callback.message.message_id)
     await callback.message.edit_text(
-        "➕ <b>Добавление водителя</b>\n\nШаг 1/4. Введите <b>Telegram ID</b> водителя (числовой):",
+        _STEP_TEXTS["tg_id"],
         reply_markup=keyboards.get_admin_cancel_keyboard(),
         parse_mode="HTML",
     )
@@ -377,18 +400,27 @@ async def admin_add_driver_tg_id(message: Message, state: FSMContext):
     if message.from_user.id not in ADMIN_IDS:
         return
     text = (message.text or "").strip()
+    data = await state.get_data()
+    msg_id = data.get("registration_msg_id")
+    try:
+        await message.delete()
+    except TelegramBadRequest:
+        pass
+
     if not text.lstrip("-").isdigit():
-        await message.answer(
-            "❗ Введите числовой Telegram ID (например: 123456789).",
-            reply_markup=keyboards.get_admin_cancel_keyboard(),
+        await _edit_reg_msg(
+            message.bot, message.chat.id, msg_id,
+            f"⚠️ <b>Ошибка:</b> Telegram ID должен быть числом. Попробуйте ещё раз:\n\n{_STEP_TEXTS['tg_id']}",
+            keyboards.get_admin_cancel_keyboard(),
         )
         return
+
     await state.update_data(new_driver_tg_id=int(text))
     await state.set_state(AdminAddDriver.waiting_for_car_model)
-    await message.answer(
-        "Шаг 2/4. Введите <b>марку автомобиля</b> (например: Toyota Camry):",
-        reply_markup=keyboards.get_admin_cancel_keyboard(),
-        parse_mode="HTML",
+    await _edit_reg_msg(
+        message.bot, message.chat.id, msg_id,
+        _STEP_TEXTS["car_model"],
+        keyboards.get_admin_cancel_keyboard(),
     )
 
 
@@ -397,15 +429,27 @@ async def admin_add_driver_car_model(message: Message, state: FSMContext):
     if message.from_user.id not in ADMIN_IDS:
         return
     car_model = (message.text or "").strip()
+    data = await state.get_data()
+    msg_id = data.get("registration_msg_id")
+    try:
+        await message.delete()
+    except TelegramBadRequest:
+        pass
+
     if not car_model:
-        await message.answer("❗ Введите марку автомобиля.", reply_markup=keyboards.get_admin_cancel_keyboard())
+        await _edit_reg_msg(
+            message.bot, message.chat.id, msg_id,
+            f"⚠️ <b>Ошибка:</b> Поле не может быть пустым. Попробуйте ещё раз:\n\n{_STEP_TEXTS['car_model']}",
+            keyboards.get_admin_cancel_keyboard(),
+        )
         return
+
     await state.update_data(new_driver_car_model=car_model)
     await state.set_state(AdminAddDriver.waiting_for_car_number)
-    await message.answer(
-        "Шаг 3/4. Введите <b>номер автомобиля</b> (например: А123ВС159):",
-        reply_markup=keyboards.get_admin_cancel_keyboard(),
-        parse_mode="HTML",
+    await _edit_reg_msg(
+        message.bot, message.chat.id, msg_id,
+        _STEP_TEXTS["car_number"],
+        keyboards.get_admin_cancel_keyboard(),
     )
 
 
@@ -414,15 +458,27 @@ async def admin_add_driver_car_number(message: Message, state: FSMContext):
     if message.from_user.id not in ADMIN_IDS:
         return
     car_number = (message.text or "").strip()
+    data = await state.get_data()
+    msg_id = data.get("registration_msg_id")
+    try:
+        await message.delete()
+    except TelegramBadRequest:
+        pass
+
     if not car_number:
-        await message.answer("❗ Введите номер автомобиля.", reply_markup=keyboards.get_admin_cancel_keyboard())
+        await _edit_reg_msg(
+            message.bot, message.chat.id, msg_id,
+            f"⚠️ <b>Ошибка:</b> Поле не может быть пустым. Попробуйте ещё раз:\n\n{_STEP_TEXTS['car_number']}",
+            keyboards.get_admin_cancel_keyboard(),
+        )
         return
+
     await state.update_data(new_driver_car_number=car_number)
     await state.set_state(AdminAddDriver.waiting_for_phone)
-    await message.answer(
-        "Шаг 4/4. Введите <b>номер телефона</b> водителя (или «—» чтобы пропустить):",
-        reply_markup=keyboards.get_admin_cancel_keyboard(),
-        parse_mode="HTML",
+    await _edit_reg_msg(
+        message.bot, message.chat.id, msg_id,
+        _STEP_TEXTS["phone"],
+        keyboards.get_admin_cancel_keyboard(),
     )
 
 
@@ -430,26 +486,32 @@ async def admin_add_driver_car_number(message: Message, state: FSMContext):
 async def admin_add_driver_phone(message: Message, state: FSMContext):
     if message.from_user.id not in ADMIN_IDS:
         return
-    phone = (message.text or "").strip()
-    if phone == "—" or phone == "-":
-        phone = None
+    phone_raw = (message.text or "").strip()
+    data = await state.get_data()
+    msg_id = data.get("registration_msg_id")
+    try:
+        await message.delete()
+    except TelegramBadRequest:
+        pass
+
+    phone = None if phone_raw in ("—", "-") else phone_raw
+
     await state.update_data(new_driver_phone=phone)
     await state.set_state(AdminAddDriver.waiting_for_confirm)
 
-    data = await state.get_data()
     tg_id = data["new_driver_tg_id"]
     car_model = data["new_driver_car_model"]
     car_number = data["new_driver_car_number"]
     phone_line = phone or "не указан"
 
-    await message.answer(
+    await _edit_reg_msg(
+        message.bot, message.chat.id, msg_id,
         f"📋 <b>Подтвердите данные водителя:</b>\n\n"
         f"🆔 Telegram ID: <code>{tg_id}</code>\n"
         f"🚗 Машина: {car_model}\n"
         f"🔢 Номер: {car_number}\n"
         f"📞 Телефон: {phone_line}",
-        reply_markup=keyboards.get_admin_confirm_add_driver_keyboard(),
-        parse_mode="HTML",
+        keyboards.get_admin_confirm_add_driver_keyboard(),
     )
 
 
@@ -479,8 +541,9 @@ async def admin_confirm_add_driver(callback: CallbackQuery, state: FSMContext):
 
     if success:
         await callback.message.edit_text(
-            "✅ Водитель успешно добавлен и одобрен.",
+            f"✅ Водитель <code>{tg_id}</code> успешно добавлен и одобрен.",
             reply_markup=keyboards.get_admin_drivers_menu_keyboard(),
+            parse_mode="HTML",
         )
         try:
             await callback.bot.send_message(
