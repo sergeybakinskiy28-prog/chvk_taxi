@@ -122,6 +122,28 @@ def get_start_order_inline_keyboard():
     buttons = [[InlineKeyboardButton(text="🚖 Заказать такси", callback_data="start_order_inline")]]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
+def get_address_suggestions_keyboard(suggestions: list, addr_type: str) -> InlineKeyboardMarkup:
+    """
+    Клавиатура-подсказки адресов для подтверждения пользователем.
+    addr_type: 'from' или 'to'
+    suggestions: list[{"display": str, ...}]
+    """
+    buttons = []
+    for i, s in enumerate(suggestions):
+        label = s["display"]
+        if len(label) > 64:
+            label = label[:61] + "..."
+        buttons.append([InlineKeyboardButton(
+            text=label,
+            callback_data=f"saddr:{addr_type}:{i}",
+        )])
+    buttons.append([InlineKeyboardButton(
+        text="✏️ Ввести другой адрес",
+        callback_data=f"saddr_reenter:{addr_type}",
+    )])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
 def get_accept_order_keyboard(order_id: int):
     buttons = [
         [InlineKeyboardButton(text="✅ Принять заказ", callback_data=f"accept_{order_id}")],

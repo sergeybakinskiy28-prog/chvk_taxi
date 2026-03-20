@@ -22,6 +22,7 @@ from chvk_city.bot.telegram.zones_data import (
     get_ride_minutes,
     get_poi,
     geocode_full,
+    geocode_suggest,
     get_driving_distance_km,
     INTERCITY_RATE_PER_KM,
     INTERCITY_NOTE,
@@ -93,24 +94,55 @@ async def process_from_address(message: Message, state: FSMContext):
     }:
         await message.answer("Сейчас я жду адрес, пожалуйста, напишите его текстом.")
         return
-    from_address = (message.text or "").strip()
-    if len(from_address) < 3:
+    raw = (message.text or "").strip()
+    if len(raw) < 3:
         await message.answer("Пожалуйста, напишите адрес отправления текстом.")
         return
-    data = await state.get_data()
-    prev_msg_ids = data.get("msg_to_delete", [])
-    geo = await geocode_full(from_address)
-    from_zone = geo["zone"]
-    from_coords = [geo["lon"], geo["lat"]] if geo["lon"] is not None else None
-    await state.update_data(from_address=from_address, from_zone=from_zone, from_coords=from_coords)
+
     try:
         await message.delete()
     except Exception:
         pass
-    await _delete_messages(message.bot, message.chat.id, prev_msg_ids)
-    await state.update_data(msg_to_delete=[])
-    print(f"DEBUG ORDER: saved from_address='{from_address}', from_zone={from_zone!r} for user {message.from_user.id}", flush=True)
-    await _prompt_for_to_address(message, state, message.from_user.id)
+
+    # Запрашиваем подсказки из Яндекс
+    suggestions = await geocode_suggest(raw, n=5)
+
+    if not suggestions:
+        # Яндекс ничего не нашёл — fallback к старому geocode_full
+        geo = await geocode_full(raw)
+        await state.update_data(
+            from_address=raw,
+            from_zone=geo["zone"],
+            from_coords=[geo["lon"], geo["lat"]] if geo["lon"] is not None else None,
+        )
+        data = await state.get_data()
+        await _delete_messages(message.bot, message.chat.id, data.get("msg_to_delete", []))
+        await state.update_data(msg_to_delete=[])
+        await _prompt_for_to_address(message, state, message.from_user.id)
+        return
+
+    if len(suggestions) == 1 and get_poi(raw):
+        # POI — единственный точный вариант, не требует выбора
+        s = suggestions[0]
+        data = await state.get_data()
+        await _delete_messages(message.bot, message.chat.id, data.get("msg_to_delete", []))
+        await state.update_data(
+            from_address=s["display"], from_zone=s["zone"],
+            from_coords=[s["lon"], s["lat"]], msg_to_delete=[],
+        )
+        print(f"DEBUG ORDER: POI from='{s['display']}', zone={s['zone']!r}", flush=True)
+        await _prompt_for_to_address(message, state, message.from_user.id)
+        return
+
+    # Показываем кнопки-подсказки
+    data = await state.get_data()
+    await _delete_messages(message.bot, message.chat.id, data.get("msg_to_delete", []))
+    await state.update_data(pending_suggestions=suggestions, pending_suggest_type="from")
+    sent = await message.answer(
+        "📍 Уточните адрес отправления:",
+        reply_markup=keyboards.get_address_suggestions_keyboard(suggestions, "from"),
+    )
+    await state.update_data(msg_to_delete=[sent.message_id])
 
 
 @router.message(OrderTaxi.waiting_for_to_address, F.text)
@@ -139,32 +171,136 @@ async def process_to_address(message: Message, state: FSMContext):
     }:
         await message.answer("Сейчас я жду второй адрес, пожалуйста, напишите его текстом.")
         return
-    to_address = (message.text or "").strip()
-    if len(to_address) < 3:
+    raw = (message.text or "").strip()
+    if len(raw) < 3:
         await message.answer("Пожалуйста, напишите адрес назначения текстом.")
         return
-    data = await state.get_data()
-    prev_msg_ids = data.get("msg_to_delete", [])
-    edit_id = data.get("route_message_id") or (prev_msg_ids[-1] if prev_msg_ids else None)
-    geo = await geocode_full(to_address)
-    to_zone = geo["zone"]
-    to_coord = [geo["lon"], geo["lat"]] if geo["lon"] is not None else None
-    to_zones = list(data.get("to_zones") or [])
-    to_zones.append(to_zone)
-    to_coords_list = list(data.get("to_coords_list") or [])
-    to_coords_list.append(to_coord)
-    zone_updates: dict = {"to_zones": to_zones, "to_coords_list": to_coords_list}
-    if not data.get("destination_addresses"):
-        zone_updates["to_zone"] = to_zone
-    await state.update_data(**zone_updates)
-    print(f"DEBUG ORDER: to_address='{to_address}', to_zone={to_zone!r}, coords={to_coord} for user {message.from_user.id}", flush=True)
+
     try:
         await message.delete()
     except Exception:
         pass
-    await _save_destination_and_show_options(
-        message, state, to_address, message.from_user.id, edit_message_id=edit_id
+
+    # Запрашиваем подсказки из Яндекс
+    suggestions = await geocode_suggest(raw, n=5)
+
+    if not suggestions:
+        # Яндекс ничего не нашёл — fallback к geocode_full
+        geo = await geocode_full(raw)
+        to_zone = geo["zone"]
+        to_coord = [geo["lon"], geo["lat"]] if geo["lon"] is not None else None
+        to_zones = list(data.get("to_zones") or [])
+        to_zones.append(to_zone)
+        to_coords_list = list(data.get("to_coords_list") or [])
+        to_coords_list.append(to_coord)
+        zone_updates: dict = {"to_zones": to_zones, "to_coords_list": to_coords_list}
+        if not data.get("destination_addresses"):
+            zone_updates["to_zone"] = to_zone
+        await state.update_data(**zone_updates)
+        prev_msg_ids = data.get("msg_to_delete", [])
+        edit_id = data.get("route_message_id") or (prev_msg_ids[-1] if prev_msg_ids else None)
+        await _save_destination_and_show_options(message, state, raw, message.from_user.id, edit_message_id=edit_id)
+        return
+
+    if len(suggestions) == 1 and get_poi(raw):
+        # POI — единственный точный вариант, не требует выбора
+        s = suggestions[0]
+        to_zone = s["zone"]
+        to_coord = [s["lon"], s["lat"]]
+        to_zones = list(data.get("to_zones") or [])
+        to_zones.append(to_zone)
+        to_coords_list = list(data.get("to_coords_list") or [])
+        to_coords_list.append(to_coord)
+        zone_updates = {"to_zones": to_zones, "to_coords_list": to_coords_list}
+        if not data.get("destination_addresses"):
+            zone_updates["to_zone"] = to_zone
+        await state.update_data(**zone_updates)
+        prev_msg_ids = data.get("msg_to_delete", [])
+        edit_id = data.get("route_message_id") or (prev_msg_ids[-1] if prev_msg_ids else None)
+        print(f"DEBUG ORDER: POI to='{s['display']}', zone={s['zone']!r}", flush=True)
+        await _save_destination_and_show_options(message, state, s["display"], message.from_user.id, edit_message_id=edit_id)
+        return
+
+    # Показываем кнопки-подсказки
+    await _delete_messages(message.bot, message.chat.id, data.get("msg_to_delete", []))
+    await state.update_data(pending_suggestions=suggestions, pending_suggest_type="to")
+    sent = await message.answer(
+        "🏁 Уточните адрес назначения:",
+        reply_markup=keyboards.get_address_suggestions_keyboard(suggestions, "to"),
     )
+    await state.update_data(msg_to_delete=[sent.message_id])
+
+
+@router.callback_query(F.data.startswith("saddr:"))
+async def suggest_addr_callback(callback: CallbackQuery, state: FSMContext):
+    """Пользователь выбрал конкретный вариант адреса из подсказок."""
+    parts = callback.data.split(":", 2)  # saddr:{from|to}:{idx}
+    addr_type = parts[1]
+    idx = int(parts[2])
+
+    data = await state.get_data()
+    suggestions = data.get("pending_suggestions") or []
+    if idx >= len(suggestions):
+        await callback.answer("Ошибка: вариант не найден", show_alert=True)
+        return
+
+    s = suggestions[idx]
+    await callback.answer()
+
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+
+    if addr_type == "from":
+        await state.update_data(
+            from_address=s["display"],
+            from_zone=s["zone"],
+            from_coords=[s["lon"], s["lat"]] if s["lon"] is not None else None,
+            pending_suggestions=[],
+            msg_to_delete=[],
+        )
+        print(
+            f"DEBUG ORDER: suggest→from='{s['display']}', zone={s['zone']!r}, "
+            f"coords=({s['lon']},{s['lat']})",
+            flush=True,
+        )
+        await _prompt_for_to_address(callback.message, state, callback.from_user.id)
+
+    elif addr_type == "to":
+        to_zone = s["zone"]
+        to_coord = [s["lon"], s["lat"]] if s["lon"] is not None else None
+        to_zones = list(data.get("to_zones") or [])
+        to_zones.append(to_zone)
+        to_coords_list = list(data.get("to_coords_list") or [])
+        to_coords_list.append(to_coord)
+        zone_updates: dict = {"to_zones": to_zones, "to_coords_list": to_coords_list, "pending_suggestions": []}
+        if not data.get("destination_addresses"):
+            zone_updates["to_zone"] = to_zone
+        await state.update_data(**zone_updates)
+        print(
+            f"DEBUG ORDER: suggest→to='{s['display']}', zone={s['zone']!r}, "
+            f"coords=({s['lon']},{s['lat']})",
+            flush=True,
+        )
+        await _save_destination_and_show_options(
+            callback.message, state, s["display"], callback.from_user.id, edit_message_id=None,
+        )
+
+
+@router.callback_query(F.data.startswith("saddr_reenter:"))
+async def suggest_reenter_callback(callback: CallbackQuery, state: FSMContext):
+    """Пользователь хочет ввести другой адрес вручную."""
+    addr_type = callback.data.split(":", 1)[1]
+    await callback.answer()
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    if addr_type == "from":
+        await _prompt_for_from_address(callback.message, state, callback.from_user.id)
+    else:
+        await _prompt_for_to_address(callback.message, state, callback.from_user.id)
 
 
 @router.message(OrderTaxi.waiting_for_comment, F.text)

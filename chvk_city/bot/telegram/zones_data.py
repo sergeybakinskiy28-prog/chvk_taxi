@@ -573,6 +573,81 @@ async def geocode_full(address: str) -> dict:
     return result
 
 
+def _shorten_address(text: str) -> str:
+    """Убирает префикс 'Россия, ' из адреса для компактного отображения."""
+    for prefix in ("Россия, ", "Russia, "):
+        if text.startswith(prefix):
+            return text[len(prefix):]
+    return text
+
+
+async def geocode_suggest(query: str, n: int = 5) -> list[dict]:
+    """
+    Возвращает до n вариантов адреса с координатами (для кнопок-подсказок).
+    Использует гео-смещение к Чапаевску, чтобы сначала показывать местные адреса,
+    но не ограничивает — межгород (Курумоч, Самара) тоже найдёт.
+    Каждый элемент: {"display": str, "lon": float, "lat": float, "zone": str|None}
+    """
+    original = (query or "").strip()
+    if not original:
+        return []
+
+    # POI — один точный результат, подтверждение не нужно
+    poi = get_poi(original)
+    if poi:
+        return [{"display": poi["display"], "lon": poi["lon"], "lat": poi["lat"], "zone": poi["zone"]}]
+
+    items: list[dict] = []
+    try:
+        async with httpx.AsyncClient(timeout=6.0) as client:
+            resp = await client.get(
+                "https://geocode-maps.yandex.ru/1.x/",
+                params={
+                    "apikey": YANDEX_GEOCODER_API_KEY,
+                    "geocode": original,
+                    "format": "json",
+                    "results": n,
+                    "lang": "ru_RU",
+                    "ll": "49.794231,52.984168",   # центр Чапаевска
+                    "spn": "4.0,2.5",               # охват ~Самарская обл.
+                    "rspn": "0",                    # не ограничивать, только смещение
+                },
+            )
+        resp.raise_for_status()
+        data = resp.json()
+        members = (
+            data.get("response", {})
+                .get("GeoObjectCollection", {})
+                .get("featureMember", [])
+        )
+        for member in members:
+            geo_obj = member.get("GeoObject", {})
+            pos = geo_obj.get("Point", {}).get("pos", "")
+            parts = pos.split()
+            if len(parts) < 2:
+                continue
+            lon, lat = float(parts[0]), float(parts[1])
+            full_text = (
+                geo_obj.get("metaDataProperty", {})
+                       .get("GeocoderMetaData", {})
+                       .get("text", "")
+                or original
+            )
+            display = _shorten_address(full_text)
+            zone = get_zone_by_coords(lon, lat)
+            if zone is None:
+                zone = get_zone_by_address(full_text)
+            items.append({"display": display, "lon": lon, "lat": lat, "zone": zone})
+            print(
+                f"[SUGGEST] {display!r} → zone={zone!r}, lon={lon:.5f}, lat={lat:.5f}",
+                flush=True,
+            )
+    except Exception as e:
+        print(f"[GEO] geocode_suggest error ({type(e).__name__}): {e}", flush=True)
+
+    return items
+
+
 def get_zone_price(from_zone: str | None, to_zone: str | None) -> tuple[float, bool]:
     """
     Возвращает (цена, признак_опознания).
