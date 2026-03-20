@@ -1944,12 +1944,12 @@ async def manual_from_callback(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     try:
         await callback.message.edit_text(
-            "Напишите адрес улицы и номер дома (откуда забрать):",
+            "✍️ Напишите адрес (улица, номер дома):",
             reply_markup=None,
         )
         msg_id = callback.message.message_id
     except Exception:
-        sent = await callback.message.answer("Напишите адрес улицы и номер дома (откуда забрать):")
+        sent = await callback.message.answer("✍️ Напишите адрес (улица, номер дома):")
         msg_id = sent.message_id
     await state.update_data(msg_to_delete=[msg_id])
 
@@ -1966,7 +1966,7 @@ async def manual_to_callback(callback: CallbackQuery, state: FSMContext):
             "Напишите адрес следующей остановки:"
         )
     else:
-        text = "Напишите адрес улицы и номер дома (куда едем):"
+        text = "✍️ Напишите адрес (улица, номер дома):"
     try:
         await callback.message.edit_text(text=text, reply_markup=None)
     except Exception:
@@ -2228,9 +2228,12 @@ async def preorder_time_callback(callback: CallbackQuery, state: FSMContext):
 async def preorder_custom_callback(callback: CallbackQuery, state: FSMContext):
     """Показывает выбор даты (Сегодня/Завтра/Послезавтра)."""
     await callback.answer()
+    data = await state.get_data()
     try:
-        await callback.message.edit_reply_markup(
-            reply_markup=keyboards.get_preorder_date_keyboard()
+        await callback.message.edit_text(
+            _build_final_summary_text(data) + "\n\n📅 <b>Выберите день предзаказа:</b>",
+            reply_markup=keyboards.get_preorder_date_keyboard(),
+            parse_mode="HTML",
         )
     except Exception:
         pass
@@ -2241,9 +2244,12 @@ async def preorder_pick_date_callback(callback: CallbackQuery, state: FSMContext
     """Пользователь выбрал дату — показываем сетку часов."""
     date_offset = int(callback.data.split(":")[1])
     await callback.answer()
+    data = await state.get_data()
     try:
-        await callback.message.edit_reply_markup(
-            reply_markup=keyboards.get_preorder_hour_keyboard(date_offset)
+        await callback.message.edit_text(
+            _build_final_summary_text(data) + "\n\n🕒 <b>Выберите часы:</b>",
+            reply_markup=keyboards.get_preorder_hour_keyboard(date_offset),
+            parse_mode="HTML",
         )
     except Exception:
         pass
@@ -2255,9 +2261,12 @@ async def preorder_pick_hour_callback(callback: CallbackQuery, state: FSMContext
     _, date_offset_s, hour_s = callback.data.split(":")
     date_offset, hour = int(date_offset_s), int(hour_s)
     await callback.answer()
+    data = await state.get_data()
     try:
-        await callback.message.edit_reply_markup(
-            reply_markup=keyboards.get_preorder_minute_keyboard(date_offset, hour)
+        await callback.message.edit_text(
+            _build_final_summary_text(data) + "\n\n🕒 <b>Выберите минуты:</b>",
+            reply_markup=keyboards.get_preorder_minute_keyboard(date_offset, hour),
+            parse_mode="HTML",
         )
     except Exception:
         pass

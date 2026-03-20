@@ -53,6 +53,8 @@ class TaxiService:
         if scheduled_at:
             try:
                 sched = datetime.fromisoformat(scheduled_at) if isinstance(scheduled_at, str) else scheduled_at
+                if sched is not None and sched.tzinfo is not None:
+                    sched = sched.replace(tzinfo=None)
             except Exception:
                 sched = None
 

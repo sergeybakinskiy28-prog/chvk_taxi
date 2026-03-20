@@ -12,18 +12,14 @@ def get_user_menu(show_become_driver: bool = True, is_owner: bool = False) -> Re
     """
     buttons = [
         [KeyboardButton(text="🚖 Заказать такси")],
-        [KeyboardButton(text="🗂 Мои заказы")],
-        [KeyboardButton(text="📞 Поддержка")],
     ]
-    if show_become_driver:
-        buttons.append([KeyboardButton(text="🚗 Стать водителем")])
     if is_owner:
         buttons.append([KeyboardButton(text="💎 УПРАВЛЕНИЕ")])
     return ReplyKeyboardMarkup(
         keyboard=buttons,
         resize_keyboard=True,
         is_persistent=True,
-        input_field_placeholder="УПРАВЛЕНИЕ КНОПКАМИ 👇",
+        input_field_placeholder="УПРАВЛЕНИЕ КНОПКАМИ ✍️",
     )
 
 
@@ -33,8 +29,6 @@ def get_driver_main_menu(is_owner: bool = False) -> ReplyKeyboardMarkup:
     """
     buttons = [
         [KeyboardButton(text="🚖 Заказать такси")],
-        [KeyboardButton(text="🗂 Мои заказы")],
-        [KeyboardButton(text="📞 Поддержка")],
         [KeyboardButton(text="💼 Кабинет водителя")],
     ]
     if is_owner:
@@ -43,7 +37,7 @@ def get_driver_main_menu(is_owner: bool = False) -> ReplyKeyboardMarkup:
         keyboard=buttons,
         resize_keyboard=True,
         is_persistent=True,
-        input_field_placeholder="УПРАВЛЕНИЕ КНОПКАМИ 👇",
+        input_field_placeholder="УПРАВЛЕНИЕ КНОПКАМИ ✍️",
     )
 
 
@@ -349,7 +343,6 @@ def get_preorder_time_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="⏱ Через 1 час",  callback_data="preorder_time:60")],
         [InlineKeyboardButton(text="⏱ Через 2 часа", callback_data="preorder_time:120")],
         [InlineKeyboardButton(text="⏱ Через 3 часа", callback_data="preorder_time:180")],
-        [InlineKeyboardButton(text="⏱ Через 6 часов", callback_data="preorder_time:360")],
         [InlineKeyboardButton(text="📅 Своё время",   callback_data="preorder_custom")],
         [InlineKeyboardButton(text="◀️ Назад", callback_data="back_to_options")],
     ]
@@ -373,7 +366,7 @@ def get_preorder_hour_keyboard(date_offset: int) -> InlineKeyboardMarkup:
     row: list[InlineKeyboardButton] = []
     for h in range(24):
         row.append(InlineKeyboardButton(
-            text=f"{h:02d}",
+            text=f"{h:02d}:",
             callback_data=f"preorder_pick_hour:{date_offset}:{h}",
         ))
         if len(row) == 6:
