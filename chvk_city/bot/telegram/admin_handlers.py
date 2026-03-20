@@ -155,10 +155,17 @@ async def admin_drivers_menu_callback(callback: CallbackQuery, state: FSMContext
         await callback.answer("Нет доступа", show_alert=True)
         return
     await _delete_driver_cards(callback.bot, callback.message.chat.id, state)
-    await callback.message.answer(
-        "🚕 Управление водителями",
-        reply_markup=keyboards.get_admin_drivers_menu_keyboard(),
-    )
+    # Редактируем то сообщение, с которого пришёл callback (футер или любое другое)
+    try:
+        await callback.message.edit_text(
+            "🚕 Управление водителями",
+            reply_markup=keyboards.get_admin_drivers_menu_keyboard(),
+        )
+    except TelegramBadRequest:
+        await callback.message.answer(
+            "🚕 Управление водителями",
+            reply_markup=keyboards.get_admin_drivers_menu_keyboard(),
+        )
     await callback.answer()
 
 
@@ -228,11 +235,13 @@ async def admin_drivers_active_callback(callback: CallbackQuery, state: FSMConte
         "⬆️ Список водителей",
         reply_markup=keyboards.get_admin_drivers_menu_keyboard(),
     )
-    card_ids.append(footer.message_id)
 
-    # Сохраняем ID заголовка + всех карточек + футера для последующего удаления
+    # Сохраняем для удаления: заголовок + карточки (но НЕ футер — он редактируется)
     card_ids.append(callback.message.message_id)
-    await state.update_data(admin_driver_card_ids=card_ids)
+    await state.update_data(
+        admin_driver_card_ids=card_ids,
+        admin_drivers_footer_id=footer.message_id,
+    )
 
 
 @admin_router.callback_query(F.data == "admin_drivers_requests")
