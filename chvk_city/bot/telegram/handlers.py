@@ -38,6 +38,18 @@ def _is_owner(user_id: int) -> bool:
 router = Router()
 
 online_drivers: set[int] = set()
+# Очередь водителей (FIFO по времени выхода на смену)
+driver_queue: list[int] = []
+# order_id -> driver_tg_id, которому сделано предложение
+pending_offers: dict[int, int] = {}
+# order_id -> asyncio.Task (таймер предложения)
+offer_tasks: dict[int, asyncio.Task] = {}
+# order_id -> {driver_msg, is_intercity}
+pending_order_data: dict[int, dict] = {}
+
+PENALTY_AMOUNT = 7.5
+OFFER_TIMEOUT_CITY = 20
+OFFER_TIMEOUT_INTERCITY = 40
 
 class OrderTaxi(StatesGroup):
     waiting_for_from_address = State()
@@ -544,7 +556,7 @@ def _night_surcharge_per_segment() -> float:
     return 0.0
 
 
-async def _estimate_order_price(data: dict) -> tuple[float, str | None]:
+async def _estimate_order_price(data: dict) -> tuple[float, str | None, bool]:
     """
     Рассчитывает стоимость маршрута по сегментам: A→B + B→C + ...
     Каждый сегмент — цена из ZONE_PRICES или загородный тариф (28₽/км) + ночная надбавка.
@@ -619,7 +631,7 @@ async def _estimate_order_price(data: dict) -> tuple[float, str | None]:
     else:
         price_note = None
 
-    return total, price_note
+    return total, price_note, any_intercity
 
 
 def _build_final_summary_text(data: dict) -> str:
@@ -1628,12 +1640,36 @@ async def driver_go_online(message: Message, state: FSMContext):
 @router.message(F.text == "⏸ Уйти со смены")
 async def driver_go_offline(message: Message, state: FSMContext):
     """Водитель уходит со смены: убираем его из локального списка онлайн-водителей."""
-    online_drivers.discard(message.from_user.id)
+    drv_id = message.from_user.id
+    online_drivers.discard(drv_id)
+    if drv_id in driver_queue:
+        driver_queue.remove(drv_id)
     await _send_single_window(
         state, message,
         "⏸ Вы ушли со смены. Новые заказы больше не будут приходить в этот чат.",
         reply_markup=keyboards.get_driver_menu(),
     )
+
+
+@router.message(F.text == "💰 Мой баланс")
+async def driver_balance_handler(message: Message, state: FSMContext):
+    """Показывает текущий баланс водителя."""
+    telegram_id = message.from_user.id
+    try:
+        resp = await get_http_client().get(f"/taxi/driver/{telegram_id}/balance")
+        if resp.status_code == 200:
+            balance = resp.json().get("balance", 0.0)
+            sign = "+" if balance >= 0 else ""
+            await message.answer(
+                f"💰 Ваш баланс: <b>{sign}{balance:.2f} руб.</b>",
+                parse_mode="HTML",
+                reply_markup=keyboards.get_driver_menu(),
+            )
+        else:
+            await message.answer("❌ Не удалось получить баланс.", reply_markup=keyboards.get_driver_menu())
+    except Exception as e:
+        logger.error(f"Failed to get balance for driver {telegram_id}: {e}")
+        await message.answer("❌ Ошибка при получении баланса.", reply_markup=keyboards.get_driver_menu())
 
 
 @router.message(DriverShift.waiting_for_district, F.text)
@@ -1686,7 +1722,28 @@ async def driver_select_district(message: Message, state: FSMContext):
         )
         return
 
+    # Проверка баланса: отрицательный баланс = нельзя выйти на смену
+    try:
+        bal_resp = await get_http_client().get(f"/taxi/driver/{message.from_user.id}/balance")
+        if bal_resp.status_code == 200:
+            balance = bal_resp.json().get("balance", 0.0)
+            if balance < 0:
+                await state.clear()
+                await message.answer(
+                    f"⛔ Вы не можете выйти на смену.\n"
+                    f"Ваш баланс отрицательный: <b>{balance:.2f} руб.</b>\n\n"
+                    "Пополните баланс у администратора.",
+                    parse_mode="HTML",
+                    reply_markup=keyboards.get_driver_menu(),
+                )
+                return
+    except Exception as e:
+        logger.error(f"Failed to check balance for driver {message.from_user.id}: {e}")
+
     online_drivers.add(message.from_user.id)
+    drv_id = message.from_user.id
+    if drv_id not in driver_queue:
+        driver_queue.append(drv_id)
     await state.clear()
     await message.answer(
         f"✅ Вы встали в очередь в районе {district}. Ожидайте заказов.",
@@ -2029,8 +2086,8 @@ async def calculate_order_price_callback(callback: CallbackQuery, state: FSMCont
     if not destination_addresses:
         await callback.answer("Сначала добавьте хотя бы один адрес назначения.", show_alert=True)
         return
-    calculated_price, price_note = await _estimate_order_price(data)
-    await state.update_data(calculated_price=calculated_price, price_note=price_note)
+    calculated_price, price_note, is_intercity = await _estimate_order_price(data)
+    await state.update_data(calculated_price=calculated_price, price_note=price_note, is_intercity=is_intercity)
     summary_data = {**data, "calculated_price": calculated_price, "price_note": price_note}
     await callback.answer()
     summary_message_id = callback.message.message_id
@@ -2094,6 +2151,72 @@ async def cancel_order_creation_callback(callback: CallbackQuery, state: FSMCont
         reply_markup=keyboards.get_start_order_inline_keyboard(),
     )
     await state.update_data(last_bot_msg_id=sent.message_id)
+
+
+async def _handle_offer_timeout(bot, order_id: int, driver_tg_id: int, timeout: int):
+    """Таймер: если водитель не ответил — штраф и передача следующему."""
+    await asyncio.sleep(timeout)
+    if pending_offers.get(order_id) != driver_tg_id:
+        return  # уже принято или отменено
+    pending_offers.pop(order_id, None)
+    offer_tasks.pop(order_id, None)
+    # Штраф
+    try:
+        await get_http_client().post(f"/taxi/driver/{driver_tg_id}/penalty")
+        await bot.send_message(
+            chat_id=driver_tg_id,
+            text=f"⏰ Время вышло! С вашего баланса списано {PENALTY_AMOUNT:.0f} руб. за пропуск заказа.",
+        )
+    except Exception as e:
+        logger.error(f"Failed to apply timeout penalty to driver {driver_tg_id}: {e}")
+    # В конец очереди
+    if driver_tg_id in driver_queue:
+        driver_queue.remove(driver_tg_id)
+        driver_queue.append(driver_tg_id)
+    # Предложить следующему
+    asyncio.create_task(_offer_order_to_next(bot, order_id))
+
+
+async def _offer_order_to_next(bot, order_id: int):
+    """Предложить заказ следующему водителю в очереди."""
+    order_info = pending_order_data.get(order_id)
+    if not order_info:
+        return
+    driver_msg = order_info["driver_msg"]
+    is_intercity = order_info.get("is_intercity", False)
+    timeout = OFFER_TIMEOUT_INTERCITY if is_intercity else OFFER_TIMEOUT_CITY
+
+    # Найти первого свободного водителя
+    designated = None
+    busy_ids = set(pending_offers.values())
+    for drv_id in driver_queue:
+        if drv_id not in busy_ids:
+            designated = drv_id
+            break
+
+    if designated is None:
+        return  # все заняты или очередь пуста
+
+    pending_offers[order_id] = designated
+
+    try:
+        await bot.send_message(
+            chat_id=designated,
+            text=f"⏱ <b>У вас {timeout} сек. на принятие заказа!</b>\n\n" + driver_msg,
+            reply_markup=keyboards.get_accept_order_keyboard(order_id),
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.error(f"Failed to send queue offer to driver {designated}: {e}")
+        pending_offers.pop(order_id, None)
+        if designated in driver_queue:
+            driver_queue.remove(designated)
+            driver_queue.append(designated)
+        asyncio.create_task(_offer_order_to_next(bot, order_id))
+        return
+
+    task = asyncio.create_task(_handle_offer_timeout(bot, order_id, designated, timeout))
+    offer_tasks[order_id] = task
 
 
 async def finalize_order(
@@ -2205,19 +2328,12 @@ async def finalize_order(
                     reply_markup=keyboards.get_accept_order_keyboard(order_id),
                     parse_mode="HTML",
                 )
-                # Дублируем заказ всем водителям, которые вышли на смену, в личные сообщения
-                for driver_tg_id in list(online_drivers):
-                    try:
-                        await message.bot.send_message(
-                            chat_id=driver_tg_id,
-                            text=driver_msg,
-                            reply_markup=keyboards.get_accept_order_keyboard(order_id),
-                            parse_mode="HTML",
-                        )
-                    except Exception as e:
-                        logger.error(f"Не удалось отправить заказ водителю {driver_tg_id}: {e}")
             except Exception as e:
                 logger.error(f"Ошибка отправки в чат водителей ({settings.DRIVER_CHAT_ID}): {e}")
+            # Последовательная очередь: предлагаем заказ первому водителю в очереди
+            is_intercity = data.get("is_intercity", False)
+            pending_order_data[order_id] = {"driver_msg": driver_msg, "is_intercity": is_intercity}
+            asyncio.create_task(_offer_order_to_next(message.bot, order_id))
             # Снимаем состояние FSM, но оставляем order_id в data для мягкой отмены/обработки UI
             await state.set_state(None)
         else:
@@ -2286,6 +2402,13 @@ async def eta_select_callback(callback: CallbackQuery, state: FSMContext):
 
         if response.status_code == 200:
             order = response.json()
+
+            # Отменяем таймер очереди — заказ принят
+            if order_id in offer_tasks:
+                offer_tasks[order_id].cancel()
+                del offer_tasks[order_id]
+            pending_offers.pop(order_id, None)
+            pending_order_data.pop(order_id, None)
 
             await callback.answer("Вы приняли заказ! ✅")
             try:
@@ -2506,9 +2629,21 @@ async def complete_order_callback(callback: CallbackQuery, state: FSMContext):
                 pass
             price = data.get("price")
             price_str = f"{price:.0f} руб." if price is not None else "—"
+            # Списать 5% комиссии с водителя
+            commission_text = ""
+            try:
+                comm_resp = await get_http_client().post(f"/taxi/order/{order_id}/deduct_commission")
+                if comm_resp.status_code == 200:
+                    cd = comm_resp.json()
+                    commission_text = (
+                        f"\n📊 Комиссия (5%): -{cd['amount']:.2f} руб."
+                        f"\n💼 Ваш баланс: {cd['new_balance']:.2f} руб."
+                    )
+            except Exception as e:
+                logger.error(f"Failed to deduct commission for order {order_id}: {e}")
             await callback.bot.send_message(
                 callback.from_user.id,
-                f"✅ Заказ №{order_id} успешно завершен!\n💰 Сумма к оплате: {price_str}",
+                f"✅ Заказ №{order_id} успешно завершен!\n💰 Сумма к оплате: {price_str}{commission_text}",
             )
 
             # После завершения заказа просим водителя указать актуальную стоянку
@@ -2768,11 +2903,35 @@ async def fire_driver_callback(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("ignore_"))
 async def ignore_order_callback(callback: CallbackQuery):
+    order_id = int(callback.data.split("_")[-1])
+    driver_tg_id = callback.from_user.id
+
+    if pending_offers.get(order_id) == driver_tg_id:
+        # Это назначенный водитель — отменяем таймер, применяем штраф
+        if order_id in offer_tasks:
+            offer_tasks[order_id].cancel()
+            del offer_tasks[order_id]
+        pending_offers.pop(order_id, None)
+        # В конец очереди
+        if driver_tg_id in driver_queue:
+            driver_queue.remove(driver_tg_id)
+            driver_queue.append(driver_tg_id)
+        # Штраф
+        try:
+            await get_http_client().post(f"/taxi/driver/{driver_tg_id}/penalty")
+            await callback.answer(f"Заказ отклонён. Списано {PENALTY_AMOUNT:.0f} руб.", show_alert=True)
+        except Exception as e:
+            logger.error(f"Failed to apply penalty for ignore: {e}")
+            await callback.answer("Заказ отклонён.")
+        # Предложить следующему
+        asyncio.create_task(_offer_order_to_next(callback.bot, order_id))
+    else:
+        await callback.answer("Заказ скрыт")
+
     try:
         await callback.message.delete()
     except Exception:
         pass
-    await callback.answer("Заказ скрыт")
 
 @router.callback_query(F.data.startswith("at_place_"))
 async def at_place_callback(callback: CallbackQuery, state: FSMContext):

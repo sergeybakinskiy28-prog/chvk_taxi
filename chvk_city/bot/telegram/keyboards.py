@@ -66,6 +66,7 @@ def get_driver_menu():
     buttons = [
         [KeyboardButton(text="▶️ Выйти на смену")],
         [KeyboardButton(text="⏸ Уйти со смены")],
+        [KeyboardButton(text="💰 Мой баланс")],
     ]
     return ReplyKeyboardMarkup(
         keyboard=buttons,

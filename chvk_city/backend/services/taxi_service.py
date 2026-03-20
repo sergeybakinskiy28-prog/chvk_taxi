@@ -277,6 +277,63 @@ class TaxiService:
         return False
 
     @staticmethod
+    async def get_driver_balance(db: AsyncSession, telegram_id: int) -> float:
+        result = await db.execute(
+            select(Driver).join(User).where(User.telegram_id == telegram_id)
+        )
+        driver = result.scalar_one_or_none()
+        return (driver.balance or 0.0) if driver else 0.0
+
+    @staticmethod
+    async def update_driver_balance(db: AsyncSession, telegram_id: int, delta: float) -> float:
+        result = await db.execute(
+            select(Driver).join(User).where(User.telegram_id == telegram_id)
+        )
+        driver = result.scalar_one_or_none()
+        if not driver:
+            return 0.0
+        driver.balance = round((driver.balance or 0.0) + delta, 2)
+        try:
+            await db.commit()
+            await db.refresh(driver)
+        except Exception:
+            await db.rollback()
+            raise
+        return driver.balance
+
+    @staticmethod
+    async def deduct_commission(db: AsyncSession, order_id: int) -> dict | None:
+        """Списать 5% комиссию с водителя после завершения заказа."""
+        result = await db.execute(select(Order).where(Order.id == order_id))
+        order = result.scalar_one_or_none()
+        if not order or not order.driver_id or not order.price:
+            return None
+
+        amount = round(order.price * 0.05, 2)
+
+        dr_result = await db.execute(
+            select(Driver, User).join(User, Driver.user_id == User.id).where(Driver.id == order.driver_id)
+        )
+        row = dr_result.one_or_none()
+        if not row:
+            return None
+
+        driver, driver_user = row
+        driver.balance = round((driver.balance or 0.0) - amount, 2)
+        try:
+            await db.commit()
+            await db.refresh(driver)
+        except Exception:
+            await db.rollback()
+            raise
+
+        return {
+            "driver_telegram_id": driver_user.telegram_id,
+            "amount": amount,
+            "new_balance": driver.balance,
+        }
+
+    @staticmethod
     async def approve_driver(db: AsyncSession, driver_id: int) -> bool:
         result = await db.execute(select(Driver).where(Driver.id == driver_id))
         driver = result.scalar_one_or_none()

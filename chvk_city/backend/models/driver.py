@@ -15,6 +15,8 @@ class Driver(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     # Текущий район/стоянка водителя (для логики смен)
     current_district: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # Баланс водителя (комиссии и штрафы)
+    balance: Mapped[float] = mapped_column(Float, default=0.0)
 
 class DriverStatus(Base):
     __tablename__ = "driver_statuses"

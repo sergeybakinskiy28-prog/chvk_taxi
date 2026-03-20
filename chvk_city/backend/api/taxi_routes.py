@@ -467,6 +467,29 @@ async def driver_cancel_order(data: DriverCancelOrder, db: AsyncSession = Depend
         "to_address": order.to_address,
     }
 
+@router.get("/driver/{tg_id}/balance")
+async def get_driver_balance(tg_id: int, db: AsyncSession = Depends(get_db)):
+    """Баланс водителя."""
+    balance = await TaxiService.get_driver_balance(db, tg_id)
+    return {"balance": balance}
+
+
+@router.post("/driver/{tg_id}/penalty")
+async def apply_driver_penalty(tg_id: int, db: AsyncSession = Depends(get_db)):
+    """Штраф 7.5₽ за пропуск/отказ от заказа."""
+    new_balance = await TaxiService.update_driver_balance(db, tg_id, -7.5)
+    return {"balance": new_balance}
+
+
+@router.post("/order/{order_id}/deduct_commission")
+async def deduct_commission(order_id: int, db: AsyncSession = Depends(get_db)):
+    """Списать 5% комиссии с водителя после завершения заказа."""
+    result = await TaxiService.deduct_commission(db, order_id)
+    if not result:
+        raise HTTPException(status_code=400, detail="Не удалось списать комиссию (нет водителя или цены)")
+    return result
+
+
 @router.post("/order")
 async def create_order(order_data: OrderCreate, db: AsyncSession = Depends(get_db)):
     order = await TaxiService.create_order(
