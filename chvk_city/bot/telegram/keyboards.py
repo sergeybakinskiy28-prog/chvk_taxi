@@ -366,7 +366,7 @@ def get_preorder_hour_keyboard(date_offset: int) -> InlineKeyboardMarkup:
     row: list[InlineKeyboardButton] = []
     for h in range(24):
         row.append(InlineKeyboardButton(
-            text=f"{h:02d}:",
+            text=f"{h:02d}:00",
             callback_data=f"preorder_pick_hour:{date_offset}:{h}",
         ))
         if len(row) == 6:

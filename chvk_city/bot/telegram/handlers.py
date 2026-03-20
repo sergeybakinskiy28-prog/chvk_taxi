@@ -2192,9 +2192,12 @@ async def back_to_options_callback(callback: CallbackQuery, state: FSMContext):
 async def preorder_order_callback(callback: CallbackQuery, state: FSMContext):
     """Показывает клавиатуру выбора времени предзаказа."""
     await callback.answer()
+    data = await state.get_data()
     try:
-        await callback.message.edit_reply_markup(
-            reply_markup=keyboards.get_preorder_time_keyboard()
+        await callback.message.edit_text(
+            _build_final_summary_text(data) + "\n\n🕒 <b>Выберите время заказа:</b>",
+            reply_markup=keyboards.get_preorder_time_keyboard(),
+            parse_mode="HTML",
         )
     except Exception:
         pass
