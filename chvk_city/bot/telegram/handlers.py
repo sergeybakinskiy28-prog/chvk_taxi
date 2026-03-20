@@ -950,6 +950,7 @@ async def cmd_start(message: Message, state: FSMContext):
         print(f"[API] register user: {e}", flush=True)
 
     try:
+        await message.answer("...", reply_markup=ReplyKeyboardRemove())
         welcome = await message.answer(
             "Привет! Я помогу вам быстро заказать такси. Нажмите на кнопку ниже, чтобы начать.",
             reply_markup=keyboards.get_start_order_inline_keyboard(),
