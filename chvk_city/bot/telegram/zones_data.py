@@ -148,6 +148,8 @@ POPULAR_PLACES: dict[str, dict] = {
     "ozon":       {"display": "Склад Озон", "lon": 49.745706, "lat": 52.960590, "zone": "Озон"},
     "склад озон": {"display": "Склад Озон", "lon": 49.745706, "lat": 52.960590, "zone": "Озон"},
     "на озон":    {"display": "Склад Озон", "lon": 49.745706, "lat": 52.960590, "zone": "Озон"},
+    "амбар":      {"display": "ТЦ Амбар, Южное шоссе, 5", "lon": 50.271670, "lat": 53.183400, "zone": None},
+    "тц амбар":   {"display": "ТЦ Амбар, Южное шоссе, 5", "lon": 50.271670, "lat": 53.183400, "zone": None},
 }
 
 
@@ -658,11 +660,11 @@ async def geocode_suggest(query: str, n: int = 4) -> list[dict]:
                     "apikey": YANDEX_GEOCODER_API_KEY,
                     "geocode": original,
                     "format": "json",
-                    "results": n,
+                    "results": n + 4,
                     "lang": "ru_RU",
                     "ll": "49.794231,52.984168",   # центр Чапаевска
-                    "spn": "4.0,2.5",               # охват ~Самарская обл.
-                    "rspn": "0",                    # не ограничивать, только смещение
+                    "spn": "2.0,1.5",              # охват ~Самарская обл.
+                    "rspn": "1",                   # строго внутри bbox
                 },
             )
         resp.raise_for_status()
@@ -672,7 +674,10 @@ async def geocode_suggest(query: str, n: int = 4) -> list[dict]:
                 .get("GeoObjectCollection", {})
                 .get("featureMember", [])
         )
+        _SAMARA_KEYWORDS = ("самар", "чапаевск", "новокуйбышевск", "сызрань", "тольятти", "курумоч")
         for member in members:
+            if len(items) >= n:
+                break
             geo_obj = member.get("GeoObject", {})
             pos = geo_obj.get("Point", {}).get("pos", "")
             parts = pos.split()
@@ -685,6 +690,9 @@ async def geocode_suggest(query: str, n: int = 4) -> list[dict]:
                        .get("text", "")
                 or original
             )
+            # Фильтр: только Самарская область и крупные города региона
+            if not any(kw in full_text.lower() for kw in _SAMARA_KEYWORDS):
+                continue
             display = _shorten_address(full_text)
             zone = get_zone_by_coords(lon, lat)
             if zone is None:
