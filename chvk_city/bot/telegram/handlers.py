@@ -296,14 +296,14 @@ async def suggest_reenter_callback(callback: CallbackQuery, state: FSMContext):
     """Пользователь хочет ввести другой адрес вручную."""
     addr_type = callback.data.split(":", 1)[1]
     await callback.answer()
+    header = "📍 Откуда вас забрать?" if addr_type == "from" else "🏁 Куда едем?"
     try:
-        await callback.message.delete()
+        await callback.message.edit_text(
+            f"{header}\n\n✍️ Напишите адрес (улица, номер дома):",
+            reply_markup=None,
+        )
     except Exception:
         pass
-    if addr_type == "from":
-        await _prompt_for_from_address(callback.message, state, callback.from_user.id)
-    else:
-        await _prompt_for_to_address(callback.message, state, callback.from_user.id)
 
 
 @router.message(OrderTaxi.waiting_for_comment, F.text)
@@ -1944,12 +1944,12 @@ async def manual_from_callback(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     try:
         await callback.message.edit_text(
-            "✍️ Напишите адрес (улица, номер дома):",
+            "📍 Откуда вас забрать?\n\n✍️ Напишите адрес (улица, номер дома):",
             reply_markup=None,
         )
         msg_id = callback.message.message_id
     except Exception:
-        sent = await callback.message.answer("✍️ Напишите адрес (улица, номер дома):")
+        sent = await callback.message.answer("📍 Откуда вас забрать?\n\n✍️ Напишите адрес (улица, номер дома):")
         msg_id = sent.message_id
     await state.update_data(msg_to_delete=[msg_id])
 
@@ -1963,10 +1963,10 @@ async def manual_to_callback(callback: CallbackQuery, state: FSMContext):
     if destination_addresses:
         text = (
             f"{_format_route_vertical(from_address, destination_addresses)}\n\n"
-            "Напишите адрес следующей остановки:"
+            "✍️ Напишите адрес следующей остановки:"
         )
     else:
-        text = "✍️ Напишите адрес (улица, номер дома):"
+        text = "🏁 Куда едем?\n\n✍️ Напишите адрес (улица, номер дома):"
     try:
         await callback.message.edit_text(text=text, reply_markup=None)
     except Exception:
