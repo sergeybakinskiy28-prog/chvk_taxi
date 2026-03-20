@@ -299,7 +299,7 @@ async def suggest_reenter_callback(callback: CallbackQuery, state: FSMContext):
     header = "📍 Откуда вас забрать?" if addr_type == "from" else "🏁 Куда едем?"
     try:
         await callback.message.edit_text(
-            f"{header}\n\n✍️ Напишите адрес (улица, номер дома):",
+            f"{header}\n\nНапишите адрес (улица, номер дома):",
             reply_markup=None,
         )
     except Exception:
@@ -530,7 +530,7 @@ def _build_recent_addresses_keyboard(addresses: list[str], step: str):
         )
 
     builder.button(
-        text="⌨️ Ввести адрес вручную",
+        text="✍️ Ввести адрес вручную",
         callback_data=manual_callback,
     )
     if step == "to":
@@ -1944,12 +1944,12 @@ async def manual_from_callback(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     try:
         await callback.message.edit_text(
-            "📍 Откуда вас забрать?\n\n✍️ Напишите адрес (улица, номер дома):",
+            "📍 Откуда вас забрать?\n\nНапишите адрес (улица, номер дома):",
             reply_markup=None,
         )
         msg_id = callback.message.message_id
     except Exception:
-        sent = await callback.message.answer("📍 Откуда вас забрать?\n\n✍️ Напишите адрес (улица, номер дома):")
+        sent = await callback.message.answer("📍 Откуда вас забрать?\n\nНапишите адрес (улица, номер дома):")
         msg_id = sent.message_id
     await state.update_data(msg_to_delete=[msg_id])
 
@@ -1963,10 +1963,10 @@ async def manual_to_callback(callback: CallbackQuery, state: FSMContext):
     if destination_addresses:
         text = (
             f"{_format_route_vertical(from_address, destination_addresses)}\n\n"
-            "✍️ Напишите адрес следующей остановки:"
+            "Напишите адрес следующей остановки:"
         )
     else:
-        text = "🏁 Куда едем?\n\n✍️ Напишите адрес (улица, номер дома):"
+        text = "🏁 Куда едем?\n\nНапишите адрес (улица, номер дома):"
     try:
         await callback.message.edit_text(text=text, reply_markup=None)
     except Exception:

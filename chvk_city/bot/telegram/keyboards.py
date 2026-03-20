@@ -132,7 +132,7 @@ def get_address_suggestions_keyboard(suggestions: list, addr_type: str) -> Inlin
             callback_data=f"saddr:{addr_type}:{i}",
         )])
     buttons.append([InlineKeyboardButton(
-        text="✏️ Ввести другой адрес",
+        text="✍️ Ввести другой адрес",
         callback_data=f"saddr_reenter:{addr_type}",
     )])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
