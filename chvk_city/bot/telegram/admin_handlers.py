@@ -253,11 +253,16 @@ async def admin_confirm_delete_callback(callback: CallbackQuery):
         return
 
     driver_id = int(callback.data.split(":")[1])
+    driver_tg_id = None
 
     try:
         resp = await get_http_client().post(f"/taxi/driver/{driver_id}/reject")
+        print(f"DEBUG: Attempting to delete driver {driver_id}. Server response: {resp.status_code} - {resp.text}", flush=True)
         success = resp.status_code == 200
-    except Exception:
+        if success:
+            driver_tg_id = resp.json().get("telegram_id")
+    except Exception as e:
+        print(f"DEBUG: Exception during driver deletion: {e}", flush=True)
         success = False
 
     if success:
@@ -265,6 +270,15 @@ async def admin_confirm_delete_callback(callback: CallbackQuery):
             "✅ Водитель удалён из системы.",
             reply_markup=keyboards.get_admin_drivers_back_keyboard(),
         )
+        # Уведомляем водителя
+        if driver_tg_id:
+            try:
+                await callback.bot.send_message(
+                    chat_id=driver_tg_id,
+                    text="⚠️ Ваш статус водителя был аннулирован администратором.",
+                )
+            except Exception as e:
+                print(f"DEBUG: Failed to notify driver {driver_tg_id}: {e}", flush=True)
     else:
         await callback.message.edit_text(
             "❌ Не удалось удалить водителя. Попробуйте снова.",
