@@ -622,6 +622,30 @@ async def get_user_orders(telegram_id: int, db: AsyncSession = Depends(get_db)):
     return orders
 
 
+@router.get("/orders/active")
+async def get_active_orders(db: AsyncSession = Depends(get_db)):
+    """Список активных заказов (не завершённых и не отменённых) для админ-панели."""
+    active_statuses = ("new", "accepted", "at_place", "in_progress")
+    stmt = (
+        select(Order)
+        .where(Order.status.in_(active_statuses))
+        .order_by(Order.created_at.desc())
+    )
+    result = await db.execute(stmt)
+    orders = result.scalars().all()
+    return [
+        {
+            "id": o.id,
+            "from_address": o.from_address,
+            "to_address": o.to_address,
+            "status": o.status,
+            "price": o.price,
+            "scheduled_at": o.scheduled_at.isoformat() if o.scheduled_at else None,
+        }
+        for o in orders
+    ]
+
+
 @router.get("/orders/history/{user_id}", response_model=List[OrderHistoryItem])
 async def get_order_history(user_id: int, limit: int = 10, db: AsyncSession = Depends(get_db)):
     """

@@ -134,6 +134,12 @@ def get_admin_panel_inline_keyboard():
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
+
+def get_admin_back_keyboard():
+    """Кнопка «⬅️ Назад» для подстраниц админ-панели."""
+    buttons = [[InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back")]]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
 def get_address_suggestions_keyboard(suggestions: list, addr_type: str) -> InlineKeyboardMarkup:
     """
     Клавиатура-подсказки адресов для подтверждения пользователем.
