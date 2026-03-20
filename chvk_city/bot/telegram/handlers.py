@@ -2640,7 +2640,7 @@ async def finalize_order(
                 if final_comment:
                     base_text += f"\n\n💬 Примечание: {final_comment}"
 
-                sent_msg = await message.answer(base_text, reply_markup=keyboards.get_order_manage_keyboard(order_id))
+                sent_msg = await message.answer(base_text, reply_markup=keyboards.get_order_manage_keyboard(order_id), parse_mode="HTML")
                 await state.update_data(
                     msg_to_delete=[sent_msg.message_id],
                     active_message_id=sent_msg.message_id,
