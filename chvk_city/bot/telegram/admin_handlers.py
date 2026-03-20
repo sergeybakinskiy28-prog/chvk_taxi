@@ -1,4 +1,5 @@
 from aiogram import Router, F
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 
@@ -149,24 +150,40 @@ async def admin_archive_callback(callback: CallbackQuery):
 
 
 @admin_router.callback_query(F.data == "admin_drivers_menu")
-async def admin_drivers_menu_callback(callback: CallbackQuery):
+async def admin_drivers_menu_callback(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id not in ADMIN_IDS:
         await callback.answer("Нет доступа", show_alert=True)
         return
-    await callback.message.edit_text(
+    await _delete_driver_cards(callback.bot, callback.message.chat.id, state)
+    await callback.message.answer(
         "🚕 Управление водителями",
         reply_markup=keyboards.get_admin_drivers_menu_keyboard(),
     )
     await callback.answer()
 
 
+async def _delete_driver_cards(bot, chat_id: int, state: FSMContext):
+    """Удаляем все сохранённые сообщения-карточки водителей."""
+    data = await state.get_data()
+    card_ids: list[int] = data.get("admin_driver_card_ids", [])
+    for msg_id in card_ids:
+        try:
+            await bot.delete_message(chat_id=chat_id, message_id=msg_id)
+        except TelegramBadRequest:
+            pass
+    await state.update_data(admin_driver_card_ids=[])
+
+
 @admin_router.callback_query(F.data == "admin_drivers_active")
-async def admin_drivers_active_callback(callback: CallbackQuery):
+async def admin_drivers_active_callback(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id not in ADMIN_IDS:
         await callback.answer("Нет доступа", show_alert=True)
         return
 
     await callback.answer()
+
+    # Удаляем старые карточки если они ещё висят
+    await _delete_driver_cards(callback.bot, callback.message.chat.id, state)
 
     try:
         resp = await get_http_client().get("/taxi/drivers/all")
@@ -181,10 +198,10 @@ async def admin_drivers_active_callback(callback: CallbackQuery):
         )
         return
 
-    # Отправляем отдельную карточку на каждого водителя (редактируем первое, остальные новые)
     text_header = f"🚕 <b>Действующие водители</b> ({len(drivers)}):"
     await callback.message.edit_text(text_header, reply_markup=None, parse_mode="HTML")
 
+    card_ids: list[int] = []
     for d in drivers:
         tg_id = d.get("telegram_id")
         name = d.get("name") or "—"
@@ -200,16 +217,22 @@ async def admin_drivers_active_callback(callback: CallbackQuery):
             f"📍 Район: {district}\n"
             f"🔗 {profile}"
         )
-        await callback.message.answer(
+        sent = await callback.message.answer(
             card,
             reply_markup=keyboards.get_admin_driver_card_keyboard(d["id"]),
             parse_mode="HTML",
         )
+        card_ids.append(sent.message_id)
 
-    await callback.message.answer(
+    footer = await callback.message.answer(
         "⬆️ Список водителей",
         reply_markup=keyboards.get_admin_drivers_menu_keyboard(),
     )
+    card_ids.append(footer.message_id)
+
+    # Сохраняем ID заголовка + всех карточек + футера для последующего удаления
+    card_ids.append(callback.message.message_id)
+    await state.update_data(admin_driver_card_ids=card_ids)
 
 
 @admin_router.callback_query(F.data == "admin_drivers_requests")
@@ -293,10 +316,11 @@ async def admin_archive_noop(callback: CallbackQuery):
 
 
 @admin_router.callback_query(F.data == "admin_back")
-async def admin_back_callback(callback: CallbackQuery):
+async def admin_back_callback(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id not in ADMIN_IDS:
         await callback.answer()
         return
+    await _delete_driver_cards(callback.bot, callback.message.chat.id, state)
     await callback.message.edit_text(
         "⚙️ Панель управления ЧВК Такси",
         reply_markup=keyboards.get_admin_panel_inline_keyboard(),
