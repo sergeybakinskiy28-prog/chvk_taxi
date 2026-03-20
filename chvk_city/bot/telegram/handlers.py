@@ -678,6 +678,17 @@ def _zone_for_address(address: str, stored_zone: str | None = None) -> str | Non
 
 _SAMARA_TZ = datetime.timezone(datetime.timedelta(hours=4))
 
+_RU_MONTHS = {
+    1: "января", 2: "февраля", 3: "марта", 4: "апреля",
+    5: "мая", 6: "июня", 7: "июля", 8: "августа",
+    9: "сентября", 10: "октября", 11: "ноября", 12: "декабря",
+}
+
+
+def _format_preorder_display(dt: datetime.datetime) -> str:
+    """Форматирует дату/время предзаказа: «21 марта, 04:15»."""
+    return f"{dt.day} {_RU_MONTHS[dt.month]}, {dt.strftime('%H:%M')}"
+
 
 def _night_surcharge_per_segment() -> float:
     """
@@ -805,7 +816,7 @@ def _build_final_summary_text(data: dict) -> str:
         price_text += f"\n<i>{price_note}</i>"
 
     preorder_str = data.get("preorder_time_str")
-    preorder_line = f"\n\n🕐 <b>Предзаказ на: {preorder_str}</b>" if preorder_str else ""
+    preorder_line = f"\n\n🕒 <b>Время подачи: {preorder_str}</b>" if preorder_str else ""
 
     return (
         "✅ <b>Итог заказа</b>\n\n"
@@ -2196,7 +2207,7 @@ async def preorder_time_callback(callback: CallbackQuery, state: FSMContext):
     now = datetime.datetime.now(_SAMARA_TZ)
     scheduled_at = now + datetime.timedelta(minutes=minutes)
     scheduled_at_iso = scheduled_at.isoformat()
-    time_str = scheduled_at.strftime("%H:%M")
+    time_str = _format_preorder_display(scheduled_at)
 
     await state.update_data(preorder_scheduled_at=scheduled_at_iso, preorder_time_str=time_str)
     await callback.answer(f"🕐 Предзаказ на {time_str}")
@@ -2206,6 +2217,83 @@ async def preorder_time_callback(callback: CallbackQuery, state: FSMContext):
     try:
         await callback.message.edit_text(
             _build_final_summary_text(summary_data),
+            reply_markup=keyboards.get_order_confirmation_keyboard(preorder_time_str=time_str),
+            parse_mode="HTML",
+        )
+    except Exception:
+        pass
+
+
+@router.callback_query(F.data == "preorder_custom", OrderTaxi.waiting_for_confirmation)
+async def preorder_custom_callback(callback: CallbackQuery, state: FSMContext):
+    """Показывает выбор даты (Сегодня/Завтра/Послезавтра)."""
+    await callback.answer()
+    try:
+        await callback.message.edit_reply_markup(
+            reply_markup=keyboards.get_preorder_date_keyboard()
+        )
+    except Exception:
+        pass
+
+
+@router.callback_query(F.data.startswith("preorder_pick_date:"), OrderTaxi.waiting_for_confirmation)
+async def preorder_pick_date_callback(callback: CallbackQuery, state: FSMContext):
+    """Пользователь выбрал дату — показываем сетку часов."""
+    date_offset = int(callback.data.split(":")[1])
+    await callback.answer()
+    try:
+        await callback.message.edit_reply_markup(
+            reply_markup=keyboards.get_preorder_hour_keyboard(date_offset)
+        )
+    except Exception:
+        pass
+
+
+@router.callback_query(F.data.startswith("preorder_pick_hour:"), OrderTaxi.waiting_for_confirmation)
+async def preorder_pick_hour_callback(callback: CallbackQuery, state: FSMContext):
+    """Пользователь выбрал час — показываем сетку минут."""
+    _, date_offset_s, hour_s = callback.data.split(":")
+    date_offset, hour = int(date_offset_s), int(hour_s)
+    await callback.answer()
+    try:
+        await callback.message.edit_reply_markup(
+            reply_markup=keyboards.get_preorder_minute_keyboard(date_offset, hour)
+        )
+    except Exception:
+        pass
+
+
+@router.callback_query(F.data.startswith("preorder_pick_min:"), OrderTaxi.waiting_for_confirmation)
+async def preorder_pick_min_callback(callback: CallbackQuery, state: FSMContext):
+    """Пользователь выбрал минуты — валидируем и сохраняем время предзаказа."""
+    _, date_offset_s, hour_s, minute_s = callback.data.split(":")
+    date_offset, hour, minute = int(date_offset_s), int(hour_s), int(minute_s)
+
+    now = datetime.datetime.now(_SAMARA_TZ)
+    target_date = now.date() + datetime.timedelta(days=date_offset)
+    scheduled_at = datetime.datetime(
+        target_date.year, target_date.month, target_date.day,
+        hour, minute,
+        tzinfo=_SAMARA_TZ,
+    )
+
+    if scheduled_at <= now:
+        await callback.answer(
+            "⛔ Это время уже прошло. Выберите время в будущем.",
+            show_alert=True,
+        )
+        return
+
+    scheduled_at_iso = scheduled_at.isoformat()
+    time_str = _format_preorder_display(scheduled_at)
+
+    await state.update_data(preorder_scheduled_at=scheduled_at_iso, preorder_time_str=time_str)
+    await callback.answer(f"🕐 Предзаказ на {time_str}")
+
+    data = await state.get_data()
+    try:
+        await callback.message.edit_text(
+            _build_final_summary_text(data),
             reply_markup=keyboards.get_order_confirmation_keyboard(preorder_time_str=time_str),
             parse_mode="HTML",
         )

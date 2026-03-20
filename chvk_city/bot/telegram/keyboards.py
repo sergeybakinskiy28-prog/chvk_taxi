@@ -350,8 +350,59 @@ def get_preorder_time_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="⏱ Через 2 часа", callback_data="preorder_time:120")],
         [InlineKeyboardButton(text="⏱ Через 3 часа", callback_data="preorder_time:180")],
         [InlineKeyboardButton(text="⏱ Через 6 часов", callback_data="preorder_time:360")],
+        [InlineKeyboardButton(text="📅 Своё время",   callback_data="preorder_custom")],
         [InlineKeyboardButton(text="◀️ Назад", callback_data="back_to_options")],
     ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_preorder_date_keyboard() -> InlineKeyboardMarkup:
+    """Выбор даты: Сегодня / Завтра / Послезавтра."""
+    buttons = [
+        [InlineKeyboardButton(text="📅 Сегодня",      callback_data="preorder_pick_date:0")],
+        [InlineKeyboardButton(text="📅 Завтра",        callback_data="preorder_pick_date:1")],
+        [InlineKeyboardButton(text="📅 Послезавтра",   callback_data="preorder_pick_date:2")],
+        [InlineKeyboardButton(text="◀️ Назад",         callback_data="preorder_order")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_preorder_hour_keyboard(date_offset: int) -> InlineKeyboardMarkup:
+    """Сетка часов 00–23 (4 кнопки в ряд)."""
+    buttons = []
+    row: list[InlineKeyboardButton] = []
+    for h in range(24):
+        row.append(InlineKeyboardButton(
+            text=f"{h:02d}",
+            callback_data=f"preorder_pick_hour:{date_offset}:{h}",
+        ))
+        if len(row) == 6:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+    buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data="preorder_custom")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_preorder_minute_keyboard(date_offset: int, hour: int) -> InlineKeyboardMarkup:
+    """Сетка минут 00–55 с шагом 5 (4 кнопки в ряд)."""
+    buttons = []
+    row: list[InlineKeyboardButton] = []
+    for m in range(0, 60, 5):
+        row.append(InlineKeyboardButton(
+            text=f":{m:02d}",
+            callback_data=f"preorder_pick_min:{date_offset}:{hour}:{m}",
+        ))
+        if len(row) == 4:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+    buttons.append([InlineKeyboardButton(
+        text="◀️ Назад",
+        callback_data=f"preorder_pick_date:{date_offset}",
+    )])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def get_order_manage_keyboard(order_id: int):
