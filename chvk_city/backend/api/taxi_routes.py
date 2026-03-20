@@ -624,25 +624,50 @@ async def get_user_orders(telegram_id: int, db: AsyncSession = Depends(get_db)):
 
 @router.get("/orders/active")
 async def get_active_orders(db: AsyncSession = Depends(get_db)):
-    """Список активных заказов (не завершённых и не отменённых) для админ-панели."""
+    """Список активных заказов с данными клиента и водителя для админ-панели."""
     active_statuses = ("new", "accepted", "at_place", "in_progress")
+
+    ClientUser = User.__table__.alias("client_user")
+    DriverUser = User.__table__.alias("driver_user")
+
     stmt = (
-        select(Order)
+        select(
+            Order,
+            ClientUser.c.telegram_id.label("client_tg_id"),
+            ClientUser.c.name.label("client_name"),
+            Driver.id.label("driver_id"),
+            Driver.car_model,
+            Driver.car_number,
+            DriverUser.c.telegram_id.label("driver_tg_id"),
+            DriverUser.c.name.label("driver_name"),
+            DriverUser.c.phone.label("driver_phone"),
+        )
+        .join(ClientUser, Order.user_id == ClientUser.c.id)
+        .outerjoin(Driver, Order.driver_id == Driver.id)
+        .outerjoin(DriverUser, Driver.user_id == DriverUser.c.id)
         .where(Order.status.in_(active_statuses))
         .order_by(Order.created_at.desc())
     )
     result = await db.execute(stmt)
-    orders = result.scalars().all()
+    rows = result.all()
+
     return [
         {
-            "id": o.id,
-            "from_address": o.from_address,
-            "to_address": o.to_address,
-            "status": o.status,
-            "price": o.price,
-            "scheduled_at": o.scheduled_at.isoformat() if o.scheduled_at else None,
+            "id": row.Order.id,
+            "from_address": row.Order.from_address,
+            "to_address": row.Order.to_address,
+            "status": row.Order.status,
+            "price": row.Order.price,
+            "scheduled_at": row.Order.scheduled_at.isoformat() if row.Order.scheduled_at else None,
+            "client_tg_id": row.client_tg_id,
+            "client_name": row.client_name,
+            "driver_tg_id": row.driver_tg_id,
+            "driver_name": row.driver_name,
+            "driver_phone": row.driver_phone,
+            "car_model": row.car_model,
+            "car_number": row.car_number,
         }
-        for o in orders
+        for row in rows
     ]
 
 
