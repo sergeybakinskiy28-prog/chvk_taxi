@@ -559,13 +559,13 @@ def _night_surcharge_per_segment() -> float:
 async def _estimate_order_price(data: dict) -> tuple[float, str | None, bool]:
     """
     Рассчитывает стоимость маршрута по сегментам: A→B + B→C + ...
-    Каждый сегмент — цена из ZONE_PRICES или загородный тариф (28₽/км) + ночная надбавка.
+    ПРИОРИТЕТ: сначала считаем дистанцию. Если > 15 км — ВСЕГДА загородный тариф (28₽/км).
     """
     from_address = data.get("from_address") or ""
     destination_addresses = data.get("destination_addresses") or []
     all_addresses = [from_address] + destination_addresses
 
-    # Зоны из геокодера
+    # Зоны из геокодера (используются только для коротких маршрутов < 15 км)
     to_zones_stored = data.get("to_zones") or []
     stored_zones: dict[int, str | None] = {0: data.get("from_zone")}
     for i, z in enumerate(to_zones_stored):
@@ -583,38 +583,51 @@ async def _estimate_order_price(data: dict) -> tuple[float, str | None, bool]:
     any_intercity = False
 
     for i in range(len(all_addresses) - 1):
-        zone_a = _zone_for_address(all_addresses[i],     stored_zones.get(i))
-        zone_b = _zone_for_address(all_addresses[i + 1], stored_zones.get(i + 1))
+        addr_a = all_addresses[i]
+        addr_b = all_addresses[i + 1]
+        coords_a = stored_coords.get(i)
+        coords_b = stored_coords.get(i + 1)
 
-        if zone_a is None or zone_b is None:
-            # Загородный тариф
-            coords_a = stored_coords.get(i)
-            coords_b = stored_coords.get(i + 1)
-            if coords_a and coords_b:
-                dist_km = await get_driving_distance_km(
-                    coords_a[0], coords_a[1], coords_b[0], coords_b[1]
-                )
-                leg_price = round(dist_km * INTERCITY_RATE_PER_KM)
-                any_intercity = True
-                print(
-                    f"[PRICE] Сегмент {i+1} [загород]: '{all_addresses[i]}' ({zone_a}) → "
-                    f"'{all_addresses[i+1]}' ({zone_b}) — {dist_km:.1f} км × 28 = {leg_price}₽"
-                    + (f" +{night_surcharge:.0f}₽ ночь" if night_surcharge else ""),
-                    flush=True,
-                )
-            else:
-                leg_price = DEFAULT_ZONE_PRICE
-                any_unrecognized = True
-                print(f"[PRICE] Сегмент {i+1}: нет координат → DEFAULT {leg_price}₽", flush=True)
-        else:
-            leg_price, recognized = get_zone_price(zone_a, zone_b)
-            if not recognized:
-                any_unrecognized = True
+        # ШАГ 1: запросить дистанцию, если есть координаты
+        dist_km: float | None = None
+        if coords_a and coords_b:
+            dist_km = await get_driving_distance_km(
+                coords_a[0], coords_a[1], coords_b[0], coords_b[1]
+            )
+
+        dist_m = (dist_km * 1000) if dist_km is not None else None
+
+        # ШАГ 2: если дистанция > 15 км — загородный тариф, зоны игнорируем
+        if dist_m is not None and dist_m > 15000:
+            leg_price = round(dist_km * INTERCITY_RATE_PER_KM)
+            any_intercity = True
             print(
-                f"[PRICE] Сегмент {i+1}: '{all_addresses[i]}' ({zone_a}) → "
-                f"'{all_addresses[i+1]}' ({zone_b}) = {leg_price}₽"
-                + (f" +{night_surcharge:.0f}₽ ночь" if night_surcharge else "")
-                + f" (recognized={recognized})",
+                f"DEBUG PRICE: dist={dist_m:.0f}m ({dist_km:.1f} км), "
+                f"intercity=True, leg={leg_price}₽, final_price={leg_price + night_surcharge:.0f}₽",
+                flush=True,
+            )
+        else:
+            # ШАГ 3: короткий маршрут — используем таблицу зон
+            zone_a = _zone_for_address(addr_a, stored_zones.get(i))
+            zone_b = _zone_for_address(addr_b, stored_zones.get(i + 1))
+
+            if zone_a is None or zone_b is None:
+                # Нет зоны, но дистанция маленькая или неизвестна
+                if dist_km is not None:
+                    leg_price = round(dist_km * INTERCITY_RATE_PER_KM)
+                    any_intercity = True
+                else:
+                    leg_price = DEFAULT_ZONE_PRICE
+                    any_unrecognized = True
+            else:
+                leg_price, recognized = get_zone_price(zone_a, zone_b)
+                if not recognized:
+                    any_unrecognized = True
+
+            print(
+                f"DEBUG PRICE: dist={dist_m or 0:.0f}m, "
+                f"zones=({zone_a}→{zone_b}), leg={leg_price}₽, "
+                f"final_price={leg_price + night_surcharge:.0f}₽",
                 flush=True,
             )
 
