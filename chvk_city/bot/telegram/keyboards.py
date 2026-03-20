@@ -117,6 +117,15 @@ def get_start_order_inline_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+def get_start_order_inline_keyboard_admin():
+    """Стартовая клавиатура для администратора — добавляет кнопку «⚙️ Управление»."""
+    buttons = [
+        [InlineKeyboardButton(text="🚖 Заказать такси", callback_data="start_order_inline")],
+        [InlineKeyboardButton(text="⚙️ Управление", callback_data="open_admin_panel")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
 def get_admin_panel_inline_keyboard():
     """Inline-клавиатура главной страницы админ-панели."""
     buttons = [

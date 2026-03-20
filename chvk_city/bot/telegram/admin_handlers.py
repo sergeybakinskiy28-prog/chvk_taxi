@@ -18,6 +18,18 @@ async def admin_panel_handler(message: Message, state: FSMContext):
     )
 
 
+@admin_router.callback_query(F.data == "open_admin_panel")
+async def open_admin_panel_callback(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    await callback.message.edit_text(
+        "⚙️ Панель управления ЧВК Такси",
+        reply_markup=keyboards.get_admin_panel_inline_keyboard(),
+    )
+    await callback.answer()
+
+
 @admin_router.callback_query(F.data == "admin_current_orders")
 async def admin_current_orders_callback(callback: CallbackQuery):
     if callback.from_user.id not in ADMIN_IDS:

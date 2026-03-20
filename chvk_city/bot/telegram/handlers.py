@@ -14,7 +14,7 @@ from chvk_city.backend.config import settings
 from chvk_city.backend.database.session import async_session
 from chvk_city.backend.services.taxi_service import TaxiService
 from chvk_city.bot.telegram import keyboards
-from chvk_city.bot.telegram.constants import OWNER_ID
+from chvk_city.bot.telegram.constants import OWNER_ID, ADMIN_IDS
 from chvk_city.bot.telegram.zones_data import (
     get_zone_by_address,
     get_zone_by_address_geocoded,
@@ -950,9 +950,14 @@ async def cmd_start(message: Message, state: FSMContext):
         print(f"[API] register user: {e}", flush=True)
 
     try:
+        start_kb = (
+            keyboards.get_start_order_inline_keyboard_admin()
+            if user_id in ADMIN_IDS
+            else keyboards.get_start_order_inline_keyboard()
+        )
         welcome = await message.answer(
             "Привет! Я помогу вам заказать такси. Нажмите на кнопку ниже, чтобы начать.",
-            reply_markup=keyboards.get_start_order_inline_keyboard(),
+            reply_markup=start_kb,
         )
         await state.update_data(
             last_bot_msg_id=welcome.message_id,
