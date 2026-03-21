@@ -14,6 +14,7 @@ admin_router = Router()
 
 class AdminAddDriver(StatesGroup):
     waiting_for_tg_id = State()
+    waiting_for_name = State()
     waiting_for_car_model = State()
     waiting_for_car_number = State()
     waiting_for_phone = State()
@@ -359,10 +360,11 @@ async def admin_to_main_callback(callback: CallbackQuery):
 # ── Добавить водителя (FSM, single-window) ───────────────────────────────────
 
 _STEP_TEXTS = {
-    "tg_id":      "➕ <b>Добавление водителя</b>\n\nШаг 1/4. Введите <b>Telegram ID</b> водителя (числовой):",
-    "car_model":  "➕ <b>Добавление водителя</b>\n\nШаг 2/4. Введите <b>марку автомобиля</b>\n(например: Toyota Camry):",
-    "car_number": "➕ <b>Добавление водителя</b>\n\nШаг 3/4. Введите <b>номер автомобиля</b>\n(например: А123ВС159):",
-    "phone":      "➕ <b>Добавление водителя</b>\n\nШаг 4/4. Введите <b>номер телефона</b> водителя\n(или «—» чтобы пропустить):",
+    "tg_id":      "➕ <b>Добавление водителя</b>\n\nШаг 1/5. Введите <b>Telegram ID</b> водителя (числовой):",
+    "name":       "➕ <b>Добавление водителя</b>\n\nШаг 2/5. Введите <b>ФИО</b> водителя\n(Фамилия Имя Отчество):",
+    "car_model":  "➕ <b>Добавление водителя</b>\n\nШаг 3/5. Введите <b>марку автомобиля</b>\n(например: Toyota Camry):",
+    "car_number": "➕ <b>Добавление водителя</b>\n\nШаг 4/5. Введите <b>номер автомобиля</b>\n(например: А123ВС159):",
+    "phone":      "➕ <b>Добавление водителя</b>\n\nШаг 5/5. Введите <b>номер телефона</b> водителя\n(или «—» чтобы пропустить):",
 }
 
 
@@ -416,6 +418,35 @@ async def admin_add_driver_tg_id(message: Message, state: FSMContext):
         return
 
     await state.update_data(new_driver_tg_id=int(text))
+    await state.set_state(AdminAddDriver.waiting_for_name)
+    await _edit_reg_msg(
+        message.bot, message.chat.id, msg_id,
+        _STEP_TEXTS["name"],
+        keyboards.get_admin_cancel_keyboard(),
+    )
+
+
+@admin_router.message(StateFilter(AdminAddDriver.waiting_for_name))
+async def admin_add_driver_name(message: Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    name = (message.text or "").strip()
+    data = await state.get_data()
+    msg_id = data.get("registration_msg_id")
+    try:
+        await message.delete()
+    except TelegramBadRequest:
+        pass
+
+    if len(name) < 3:
+        await _edit_reg_msg(
+            message.bot, message.chat.id, msg_id,
+            f"⚠️ <b>Ошибка:</b> ФИО должно содержать минимум 3 символа. Попробуйте ещё раз:\n\n{_STEP_TEXTS['name']}",
+            keyboards.get_admin_cancel_keyboard(),
+        )
+        return
+
+    await state.update_data(new_driver_name=name)
     await state.set_state(AdminAddDriver.waiting_for_car_model)
     await _edit_reg_msg(
         message.bot, message.chat.id, msg_id,
@@ -500,6 +531,7 @@ async def admin_add_driver_phone(message: Message, state: FSMContext):
     await state.set_state(AdminAddDriver.waiting_for_confirm)
 
     tg_id = data["new_driver_tg_id"]
+    name = data.get("new_driver_name") or "—"
     car_model = data["new_driver_car_model"]
     car_number = data["new_driver_car_number"]
     phone_line = phone or "не указан"
@@ -508,6 +540,7 @@ async def admin_add_driver_phone(message: Message, state: FSMContext):
         message.bot, message.chat.id, msg_id,
         f"📋 <b>Подтвердите данные водителя:</b>\n\n"
         f"🆔 Telegram ID: <code>{tg_id}</code>\n"
+        f"👤 ФИО: {name}\n"
         f"🚗 Машина: {car_model}\n"
         f"🔢 Номер: {car_number}\n"
         f"📞 Телефон: {phone_line}",
@@ -523,6 +556,7 @@ async def admin_confirm_add_driver(callback: CallbackQuery, state: FSMContext):
 
     data = await state.get_data()
     tg_id = data.get("new_driver_tg_id")
+    name = data.get("new_driver_name")
     car_model = data.get("new_driver_car_model")
     car_number = data.get("new_driver_car_number")
     phone = data.get("new_driver_phone")
@@ -531,6 +565,8 @@ async def admin_confirm_add_driver(callback: CallbackQuery, state: FSMContext):
 
     try:
         payload = {"telegram_id": tg_id, "car_model": car_model, "car_number": car_number}
+        if name:
+            payload["name"] = name
         if phone:
             payload["phone"] = phone
         resp = await get_http_client().post("/taxi/admin/add_driver", json=payload)

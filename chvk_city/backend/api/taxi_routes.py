@@ -37,6 +37,7 @@ class AdminAddDriver(BaseModel):
     car_model: str
     car_number: str
     phone: str | None = None
+    name: str | None = None
 
 class UserUpdatePhone(BaseModel):
     telegram_id: int
@@ -259,7 +260,7 @@ async def admin_delete_driver(tg_id: int, db: AsyncSession = Depends(get_db)):
 @router.post("/admin/add_driver")
 async def admin_add_driver(data: AdminAddDriver, db: AsyncSession = Depends(get_db)):
     """Ручное добавление одобренного водителя администратором."""
-    user = await TaxiService.get_or_create_user(db, data.telegram_id)
+    user = await TaxiService.get_or_create_user(db, data.telegram_id, name=data.name)
     if data.phone:
         await TaxiService.update_user_phone(db, data.telegram_id, data.phone)
     # Если водитель уже существует (в т.ч. мягко удалённый) — обновляем запись
