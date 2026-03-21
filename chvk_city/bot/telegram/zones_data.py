@@ -767,10 +767,12 @@ async def geocode_suggest(query: str, n: int = 4) -> list[dict]:
             # ── Fallback: geocode_full ────────────────────────────────────────
             if not items:
                 geo = await geocode_full(original)
-                if geo.get("lon") is not None:
+                if geo.get("lon") is not None and geo.get("precision") != "other":
                     display = _shorten_address(original) or original
-                    items.append({"display": display, "lon": geo["lon"], "lat": geo["lat"], "zone": geo.get("zone")})
-                    print(f"[SUGGEST] Fallback geocode_full: {original!r} → lon={geo['lon']}, lat={geo['lat']}, zone={geo['zone']}", flush=True)
+                    items.append({"display": display, "lon": geo["lon"], "lat": geo["lat"], "zone": geo.get("zone"), "precision": geo.get("precision")})
+                    print(f"[SUGGEST] Fallback geocode_full: {original!r} → precision={geo.get('precision')!r}, lon={geo['lon']}, lat={geo['lat']}, zone={geo['zone']}", flush=True)
+                elif geo.get("precision") == "other":
+                    print(f"[SUGGEST] Fallback geocode_full: {original!r} → precision='other', отклонено", flush=True)
 
     except Exception as e:
         print(f"[GEO] geocode_suggest error ({type(e).__name__}): {e}", flush=True)
