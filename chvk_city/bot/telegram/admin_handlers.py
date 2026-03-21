@@ -312,7 +312,7 @@ async def admin_confirm_delete_callback(callback: CallbackQuery):
     if success:
         await callback.message.edit_text(
             "✅ Водитель удалён из системы.",
-            reply_markup=keyboards.get_admin_drivers_back_keyboard(),
+            reply_markup=None,
         )
         # Уведомляем водителя
         if driver_tg_id:
