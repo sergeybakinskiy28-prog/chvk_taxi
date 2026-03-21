@@ -113,10 +113,16 @@ async def process_from_address(message: Message, state: FSMContext):
     if not suggestions:
         # Яндекс ничего не нашёл — fallback к старому geocode_full
         geo = await geocode_full(raw)
+        if geo["lon"] is None:
+            sent = await message.answer(
+                "❌ Адрес не найден. Пожалуйста, введите точный адрес: улицу и номер дома."
+            )
+            await state.update_data(msg_to_delete=[sent.message_id])
+            return
         await state.update_data(
             from_address=raw,
             from_zone=geo["zone"],
-            from_coords=[geo["lon"], geo["lat"]] if geo["lon"] is not None else None,
+            from_coords=[geo["lon"], geo["lat"]],
         )
         data = await state.get_data()
         await _delete_messages(message.bot, message.chat.id, data.get("msg_to_delete", []))
@@ -190,8 +196,14 @@ async def process_to_address(message: Message, state: FSMContext):
     if not suggestions:
         # Яндекс ничего не нашёл — fallback к geocode_full
         geo = await geocode_full(raw)
+        if geo["lon"] is None:
+            sent = await message.answer(
+                "❌ Адрес не найден. Пожалуйста, введите точный адрес: улицу и номер дома."
+            )
+            await state.update_data(msg_to_delete=[sent.message_id])
+            return
         to_zone = geo["zone"]
-        to_coord = [geo["lon"], geo["lat"]] if geo["lon"] is not None else None
+        to_coord = [geo["lon"], geo["lat"]]
         to_zones = list(data.get("to_zones") or [])
         to_zones.append(to_zone)
         to_coords_list = list(data.get("to_coords_list") or [])
