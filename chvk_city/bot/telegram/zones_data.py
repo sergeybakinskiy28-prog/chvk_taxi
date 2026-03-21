@@ -554,7 +554,8 @@ async def get_driving_distance_km(lon1: float, lat1: float, lon2: float, lat2: f
 
 async def geocode_full(address: str) -> dict:
     """
-    Полное геокодирование: возвращает {"zone": str|None, "lon": float|None, "lat": float|None}.
+    Полное геокодирование: возвращает {"zone": str|None, "lon": float|None, "lat": float|None,
+    "precision": str|None, "formatted": str|None}.
     Порядок: POI → Яндекс + полигоны → ключевые слова.
     """
     original = (address or "").strip()
@@ -563,9 +564,9 @@ async def geocode_full(address: str) -> dict:
     poi = get_poi(original)
     if poi:
         print(f"[GEO] geocode_full POI: {original!r} → {poi['zone']!r}", flush=True)
-        return {"zone": poi["zone"], "lon": poi["lon"], "lat": poi["lat"]}
+        return {"zone": poi["zone"], "lon": poi["lon"], "lat": poi["lat"], "precision": "exact", "formatted": poi["display"]}
 
-    result: dict = {"zone": None, "lon": None, "lat": None}
+    result: dict = {"zone": None, "lon": None, "lat": None, "precision": None, "formatted": None}
     full_address = _CITY_PREFIX + original
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
@@ -590,17 +591,18 @@ async def geocode_full(address: str) -> dict:
             geo = members[0]["GeoObject"]
             pos = geo.get("Point", {}).get("pos", "")
             parts = pos.split()
+            meta = geo.get("metaDataProperty", {}).get("GeocoderMetaData", {})
+            precision = meta.get("precision")
+            formatted = meta.get("text", "") or ""
+            result["precision"] = precision
+            result["formatted"] = formatted
+            print(f"[GEO] geocode_full: {original!r} → precision={precision!r}, formatted={formatted!r}", flush=True)
             if len(parts) >= 2:
                 lon, lat = float(parts[0]), float(parts[1])
                 result["lon"] = lon
                 result["lat"] = lat
                 zone = get_zone_by_coords(lon, lat)
                 if zone is None:
-                    formatted = (
-                        geo.get("metaDataProperty", {})
-                           .get("GeocoderMetaData", {})
-                           .get("text", "")
-                    )
                     zone = get_zone_by_address(formatted)
                 result["zone"] = zone
                 print(f"[GEO] geocode_full: {original!r} → zone={zone!r}, lon={lon:.5f}, lat={lat:.5f}", flush=True)

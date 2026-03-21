@@ -112,9 +112,11 @@ async def process_from_address(message: Message, state: FSMContext):
 
     if not suggestions:
         geo = await geocode_full(raw)
-        if geo["lon"] is None:
+        if geo["lon"] is None or geo.get("precision") == "other":
+            data = await state.get_data()
+            await _delete_messages(message.bot, message.chat.id, data.get("msg_to_delete", []))
             sent = await message.answer(
-                "❌ Адрес не найден. Пожалуйста, введите точный адрес: улицу и номер дома."
+                "❌ Адрес не найден. Пожалуйста, введите точный адрес: улицу и номер дома.\n\nПример: Самарская 51"
             )
             await state.update_data(msg_to_delete=[sent.message_id])
             return
@@ -195,9 +197,10 @@ async def process_to_address(message: Message, state: FSMContext):
 
     if not suggestions:
         geo = await geocode_full(raw)
-        if geo["lon"] is None:
+        if geo["lon"] is None or geo.get("precision") == "other":
+            await _delete_messages(message.bot, message.chat.id, data.get("msg_to_delete", []))
             sent = await message.answer(
-                "❌ Адрес не найден. Пожалуйста, введите точный адрес: улицу и номер дома."
+                "❌ Адрес не найден. Пожалуйста, введите точный адрес: улицу и номер дома.\n\nПример: Самарская 51"
             )
             await state.update_data(msg_to_delete=[sent.message_id])
             return
