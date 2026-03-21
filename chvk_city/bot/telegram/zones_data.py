@@ -695,6 +695,8 @@ async def geocode_suggest(query: str, n: int = 4) -> list[dict]:
     if poi:
         return [{"display": poi["display"], "lon": poi["lon"], "lat": poi["lat"], "zone": poi["zone"]}]
 
+    print(f"[SUGGEST] Запрос: {original!r}", flush=True)
+
     _BASE_PARAMS = {
         "apikey": YANDEX_GEOCODER_API_KEY,
         "geocode": original,
@@ -722,6 +724,7 @@ async def geocode_suggest(query: str, n: int = 4) -> list[dict]:
                     .get("featureMember", [])
             )
             _parse_geocode_results(members, items, n, filter_by_region=True)
+            print(f"[SUGGEST] Запрос 1 (rspn=1): найдено {len(members)} результатов от Яндекса, после фильтра: {len(items)}", flush=True)
 
             # ── Запрос 2 (резерв): мягкое смещение, без фильтра региона ──────
             if not items:
@@ -738,10 +741,12 @@ async def geocode_suggest(query: str, n: int = 4) -> list[dict]:
                          .get("featureMember", [])
                 )
                 _parse_geocode_results(members2, items, n, filter_by_region=False)
+                print(f"[SUGGEST] Запрос 2 (rspn=0): найдено {len(members2)} результатов от Яндекса, после парсинга: {len(items)}", flush=True)
 
     except Exception as e:
         print(f"[GEO] geocode_suggest error ({type(e).__name__}): {e}", flush=True)
 
+    print(f"[SUGGEST] Итого для {original!r}: {len(items)} подсказок", flush=True)
     return items
 
 
