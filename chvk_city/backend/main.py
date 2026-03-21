@@ -44,6 +44,13 @@ async def startup():
             )
         except Exception:
             pass
+        # Migration: add car_color column to drivers if missing
+        try:
+            await conn.execute(
+                text("ALTER TABLE drivers ADD COLUMN IF NOT EXISTS car_color VARCHAR(50)")
+            )
+        except Exception:
+            pass
 
 @app.get("/")
 async def root():

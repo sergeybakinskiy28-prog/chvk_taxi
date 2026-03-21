@@ -10,6 +10,7 @@ class Driver(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), unique=True)
     car_model: Mapped[str] = mapped_column(String(255))
     car_number: Mapped[str] = mapped_column(String(20))
+    car_color: Mapped[str | None] = mapped_column(String(50), nullable=True)
     rating: Mapped[float] = mapped_column(Float, default=5.0)
     is_approved: Mapped[bool] = mapped_column(default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

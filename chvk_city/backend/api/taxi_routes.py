@@ -38,6 +38,7 @@ class AdminAddDriver(BaseModel):
     car_number: str
     phone: str | None = None
     name: str | None = None
+    car_color: str | None = None
 
 class UserUpdatePhone(BaseModel):
     telegram_id: int
@@ -269,6 +270,8 @@ async def admin_add_driver(data: AdminAddDriver, db: AsyncSession = Depends(get_
     if driver:
         driver.car_model = data.car_model
         driver.car_number = data.car_number
+        if data.car_color is not None:
+            driver.car_color = data.car_color
         driver.is_approved = True
         driver.deleted_at = None
         try:
@@ -279,6 +282,14 @@ async def admin_add_driver(data: AdminAddDriver, db: AsyncSession = Depends(get_
             raise
     else:
         driver = await TaxiService.register_driver(db, data.telegram_id, data.car_model, data.car_number)
+        if data.car_color is not None:
+            driver.car_color = data.car_color
+            try:
+                await db.commit()
+                await db.refresh(driver)
+            except Exception:
+                await db.rollback()
+                raise
         await TaxiService.approve_driver(db, driver.id)
     return {"status": "ok", "driver_id": driver.id, "telegram_id": data.telegram_id}
 

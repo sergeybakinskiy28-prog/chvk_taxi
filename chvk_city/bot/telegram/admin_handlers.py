@@ -16,6 +16,7 @@ class AdminAddDriver(StatesGroup):
     waiting_for_tg_id = State()
     waiting_for_name = State()
     waiting_for_car_model = State()
+    waiting_for_car_color = State()
     waiting_for_car_number = State()
     waiting_for_phone = State()
     waiting_for_confirm = State()
@@ -360,11 +361,12 @@ async def admin_to_main_callback(callback: CallbackQuery):
 # ── Добавить водителя (FSM, single-window) ───────────────────────────────────
 
 _STEP_TEXTS = {
-    "tg_id":      "➕ <b>Добавление водителя</b>\n\nШаг 1/5. Введите <b>Telegram ID</b> водителя (числовой):",
-    "name":       "➕ <b>Добавление водителя</b>\n\nШаг 2/5. Введите <b>ФИО</b> водителя\n(Фамилия Имя Отчество):",
-    "car_model":  "➕ <b>Добавление водителя</b>\n\nШаг 3/5. Введите <b>марку автомобиля</b>\n(например: Toyota Camry):",
-    "car_number": "➕ <b>Добавление водителя</b>\n\nШаг 4/5. Введите <b>номер автомобиля</b>\n(например: А123ВС159):",
-    "phone":      "➕ <b>Добавление водителя</b>\n\nШаг 5/5. Введите <b>номер телефона</b> водителя\n(или «—» чтобы пропустить):",
+    "tg_id":      "➕ <b>Добавление водителя</b>\n\nШаг 1/6. Введите <b>Telegram ID</b> водителя (числовой):",
+    "name":       "➕ <b>Добавление водителя</b>\n\nШаг 2/6. Введите <b>ФИО</b> водителя\n(Фамилия Имя Отчество):",
+    "car_model":  "➕ <b>Добавление водителя</b>\n\nШаг 3/6. Введите <b>марку автомобиля</b>\n(например: Toyota Camry):",
+    "car_color":  "➕ <b>Добавление водителя</b>\n\nШаг 4/6. Введите <b>цвет автомобиля</b>\n(например: белый, чёрный, серебристый):",
+    "car_number": "➕ <b>Добавление водителя</b>\n\nШаг 5/6. Введите <b>номер автомобиля</b>\n(например: А123ВС159):",
+    "phone":      "➕ <b>Добавление водителя</b>\n\nШаг 6/6. Введите <b>номер телефона</b> водителя\n(или «—» чтобы пропустить):",
 }
 
 
@@ -476,6 +478,35 @@ async def admin_add_driver_car_model(message: Message, state: FSMContext):
         return
 
     await state.update_data(new_driver_car_model=car_model)
+    await state.set_state(AdminAddDriver.waiting_for_car_color)
+    await _edit_reg_msg(
+        message.bot, message.chat.id, msg_id,
+        _STEP_TEXTS["car_color"],
+        keyboards.get_admin_cancel_keyboard(),
+    )
+
+
+@admin_router.message(StateFilter(AdminAddDriver.waiting_for_car_color))
+async def admin_add_driver_car_color(message: Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    car_color = (message.text or "").strip()
+    data = await state.get_data()
+    msg_id = data.get("registration_msg_id")
+    try:
+        await message.delete()
+    except TelegramBadRequest:
+        pass
+
+    if not car_color:
+        await _edit_reg_msg(
+            message.bot, message.chat.id, msg_id,
+            f"⚠️ <b>Ошибка:</b> Поле не может быть пустым. Попробуйте ещё раз:\n\n{_STEP_TEXTS['car_color']}",
+            keyboards.get_admin_cancel_keyboard(),
+        )
+        return
+
+    await state.update_data(new_driver_car_color=car_color)
     await state.set_state(AdminAddDriver.waiting_for_car_number)
     await _edit_reg_msg(
         message.bot, message.chat.id, msg_id,
@@ -533,6 +564,7 @@ async def admin_add_driver_phone(message: Message, state: FSMContext):
     tg_id = data["new_driver_tg_id"]
     name = data.get("new_driver_name") or "—"
     car_model = data["new_driver_car_model"]
+    car_color = data.get("new_driver_car_color") or "—"
     car_number = data["new_driver_car_number"]
     phone_line = phone or "не указан"
 
@@ -542,6 +574,7 @@ async def admin_add_driver_phone(message: Message, state: FSMContext):
         f"🆔 Telegram ID: <code>{tg_id}</code>\n"
         f"👤 ФИО: {name}\n"
         f"🚗 Машина: {car_model}\n"
+        f"🎨 Цвет: {car_color}\n"
         f"🔢 Номер: {car_number}\n"
         f"📞 Телефон: {phone_line}",
         keyboards.get_admin_confirm_add_driver_keyboard(),
@@ -558,6 +591,7 @@ async def admin_confirm_add_driver(callback: CallbackQuery, state: FSMContext):
     tg_id = data.get("new_driver_tg_id")
     name = data.get("new_driver_name")
     car_model = data.get("new_driver_car_model")
+    car_color = data.get("new_driver_car_color")
     car_number = data.get("new_driver_car_number")
     phone = data.get("new_driver_phone")
 
@@ -567,6 +601,8 @@ async def admin_confirm_add_driver(callback: CallbackQuery, state: FSMContext):
         payload = {"telegram_id": tg_id, "car_model": car_model, "car_number": car_number}
         if name:
             payload["name"] = name
+        if car_color:
+            payload["car_color"] = car_color
         if phone:
             payload["phone"] = phone
         resp = await get_http_client().post("/taxi/admin/add_driver", json=payload)
