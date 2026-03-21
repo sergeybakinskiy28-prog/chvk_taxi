@@ -726,43 +726,13 @@ async def geocode_suggest(query: str, n: int = 4) -> list[dict]:
             _parse_geocode_results(members, items, n, filter_by_region=True)
             print(f"[SUGGEST] Запрос 1 (rspn=1): найдено {len(members)} результатов от Яндекса, после фильтра: {len(items)}", flush=True)
 
-            # ── Fallback: Geosuggest + геокодирование каждой подсказки ─────────
+            # ── Fallback: geocode_full ────────────────────────────────────────
             if not items:
-                try:
-                    resp_sg = await client.get(
-                        "https://suggest-maps.yandex.ru/v1/suggest",
-                        params={
-                            "apikey": YANDEX_GEOCODER_API_KEY,
-                            "text": original,
-                            "lang": "ru",
-                            "types": "geo,biz",
-                            "results": n,
-                            "ll": "49.794231,52.984168",
-                            "spn": "2.0,1.5",
-                        },
-                    )
-                    resp_sg.raise_for_status()
-                    sg_results = resp_sg.json().get("results", [])
-                    print(f"[SUGGEST] Fallback geosuggest: найдено {len(sg_results)} подсказок", flush=True)
-
-                    for sg in sg_results[:n]:
-                        if len(items) >= n:
-                            break
-                        title = (sg.get("title") or {}).get("text", "")
-                        subtitle = (sg.get("subtitle") or {}).get("text", "")
-                        full_query = f"{title}, {subtitle}" if subtitle else title
-                        if not full_query:
-                            continue
-                        geo = await geocode_full(full_query)
-                        if geo.get("lon") is None:
-                            continue
-                        display = _shorten_address(full_query)
-                        zone = geo.get("zone")
-                        items.append({"display": display, "lon": geo["lon"], "lat": geo["lat"], "zone": zone})
-                        print(f"[SUGGEST] Geosuggest → geocoded: {display!r}, zone={zone!r}", flush=True)
-
-                except Exception as e_sg:
-                    print(f"[GEO] geocode_suggest geosuggest error ({type(e_sg).__name__}): {e_sg}", flush=True)
+                geo = await geocode_full(original)
+                if geo.get("lon") is not None:
+                    display = _shorten_address(original) or original
+                    items.append({"display": display, "lon": geo["lon"], "lat": geo["lat"], "zone": geo.get("zone")})
+                    print(f"[SUGGEST] Fallback geocode_full: {original!r} → lon={geo['lon']}, lat={geo['lat']}, zone={geo['zone']}", flush=True)
 
     except Exception as e:
         print(f"[GEO] geocode_suggest error ({type(e).__name__}): {e}", flush=True)
