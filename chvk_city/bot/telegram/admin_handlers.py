@@ -7,7 +7,7 @@ from aiogram.fsm.context import FSMContext
 
 from chvk_city.bot.telegram.constants import ADMIN_IDS
 from chvk_city.bot.telegram import keyboards
-from chvk_city.bot.telegram.handlers import get_http_client
+from chvk_city.bot.telegram.handlers import get_http_client, online_drivers, driver_queue, pending_offers
 
 admin_router = Router()
 
@@ -118,6 +118,63 @@ async def admin_current_orders_callback(callback: CallbackQuery):
 
     await callback.message.edit_text(
         text,
+        reply_markup=keyboards.get_admin_back_keyboard(),
+        parse_mode="HTML",
+    )
+
+
+@admin_router.callback_query(F.data == "admin_online_drivers")
+async def admin_online_drivers_callback(callback: CallbackQuery):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+
+    await callback.answer()
+
+    if not online_drivers:
+        await callback.message.edit_text(
+            "🟢 Сейчас нет водителей на линии.",
+            reply_markup=keyboards.get_admin_back_keyboard(),
+        )
+        return
+
+    try:
+        resp = await get_http_client().get("/taxi/drivers/all")
+        all_drivers = resp.json() if resp.status_code == 200 else []
+    except Exception:
+        all_drivers = []
+
+    # Быстрый поиск по telegram_id
+    driver_map: dict[int, dict] = {d["telegram_id"]: d for d in all_drivers if d.get("telegram_id")}
+
+    busy_ids = set(pending_offers.values())
+
+    lines: list[str] = ["🟢 <b>Водители на линии:</b>\n"]
+    count_free = 0
+    count_busy = 0
+
+    for tg_id in driver_queue:
+        if tg_id not in online_drivers:
+            continue
+        d = driver_map.get(tg_id)
+        name = (d.get("name") or "—") if d else "—"
+        district = (d.get("current_district") or "—") if d else "—"
+        if tg_id in busy_ids:
+            status = "🔴 На заказе"
+            count_busy += 1
+        else:
+            status = "🟢 Свободен"
+            count_free += 1
+        lines.append(
+            f'👤 <a href="tg://user?id={tg_id}">{name}</a>\n'
+            f"📍 {district} | {status}"
+        )
+
+    total = count_free + count_busy
+    lines.append(f"\n🟢 Свободны: {count_free} | 🔴 На заказе: {count_busy} | Всего: {total}")
+
+    await callback.message.edit_text(
+        "\n".join(lines),
         reply_markup=keyboards.get_admin_back_keyboard(),
         parse_mode="HTML",
     )

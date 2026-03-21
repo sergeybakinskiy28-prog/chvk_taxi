@@ -130,6 +130,7 @@ def get_admin_panel_inline_keyboard():
     """Inline-клавиатура главной страницы админ-панели."""
     buttons = [
         [InlineKeyboardButton(text="📋 Текущие заказы", callback_data="admin_current_orders")],
+        [InlineKeyboardButton(text="🟢 Водители на линии", callback_data="admin_online_drivers")],
         [InlineKeyboardButton(text="📦 Архив заказов", callback_data="admin_archive_page:0")],
         [InlineKeyboardButton(text="🚕 Водители", callback_data="admin_drivers_menu")],
         [InlineKeyboardButton(text="⬅️ Главное меню", callback_data="admin_to_main")],
