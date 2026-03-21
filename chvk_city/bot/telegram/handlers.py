@@ -111,7 +111,6 @@ async def process_from_address(message: Message, state: FSMContext):
     suggestions = await geocode_suggest(raw, n=4)
 
     if not suggestions:
-        # Яндекс ничего не нашёл — fallback к старому geocode_full
         geo = await geocode_full(raw)
         if geo["lon"] is None:
             sent = await message.answer(
@@ -119,15 +118,16 @@ async def process_from_address(message: Message, state: FSMContext):
             )
             await state.update_data(msg_to_delete=[sent.message_id])
             return
-        await state.update_data(
-            from_address=raw,
-            from_zone=geo["zone"],
-            from_coords=[geo["lon"], geo["lat"]],
-        )
+        # Показываем единственную подсказку — пользователь подтверждает или вводит другой
+        suggestions = [{"display": raw, "lon": geo["lon"], "lat": geo["lat"], "zone": geo["zone"]}]
         data = await state.get_data()
         await _delete_messages(message.bot, message.chat.id, data.get("msg_to_delete", []))
-        await state.update_data(msg_to_delete=[])
-        await _prompt_for_to_address(message, state, message.from_user.id)
+        await state.update_data(pending_suggestions=suggestions, pending_suggest_type="from")
+        sent = await message.answer(
+            "📍 Уточните адрес отправления:",
+            reply_markup=keyboards.get_address_suggestions_keyboard(suggestions, "from"),
+        )
+        await state.update_data(msg_to_delete=[sent.message_id])
         return
 
     if len(suggestions) == 1 and get_poi(raw):
@@ -194,7 +194,6 @@ async def process_to_address(message: Message, state: FSMContext):
     suggestions = await geocode_suggest(raw, n=4)
 
     if not suggestions:
-        # Яндекс ничего не нашёл — fallback к geocode_full
         geo = await geocode_full(raw)
         if geo["lon"] is None:
             sent = await message.answer(
@@ -202,19 +201,15 @@ async def process_to_address(message: Message, state: FSMContext):
             )
             await state.update_data(msg_to_delete=[sent.message_id])
             return
-        to_zone = geo["zone"]
-        to_coord = [geo["lon"], geo["lat"]]
-        to_zones = list(data.get("to_zones") or [])
-        to_zones.append(to_zone)
-        to_coords_list = list(data.get("to_coords_list") or [])
-        to_coords_list.append(to_coord)
-        zone_updates: dict = {"to_zones": to_zones, "to_coords_list": to_coords_list}
-        if not data.get("destination_addresses"):
-            zone_updates["to_zone"] = to_zone
-        await state.update_data(**zone_updates)
-        prev_msg_ids = data.get("msg_to_delete", [])
-        edit_id = data.get("route_message_id") or (prev_msg_ids[-1] if prev_msg_ids else None)
-        await _save_destination_and_show_options(message, state, raw, message.from_user.id, edit_message_id=edit_id)
+        # Показываем единственную подсказку — пользователь подтверждает или вводит другой
+        suggestions = [{"display": raw, "lon": geo["lon"], "lat": geo["lat"], "zone": geo["zone"]}]
+        await _delete_messages(message.bot, message.chat.id, data.get("msg_to_delete", []))
+        await state.update_data(pending_suggestions=suggestions, pending_suggest_type="to")
+        sent = await message.answer(
+            "🏁 Уточните адрес назначения:",
+            reply_markup=keyboards.get_address_suggestions_keyboard(suggestions, "to"),
+        )
+        await state.update_data(msg_to_delete=[sent.message_id])
         return
 
     if len(suggestions) == 1 and get_poi(raw):
