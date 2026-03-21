@@ -635,11 +635,55 @@ def _shorten_address(text: str) -> str:
     return ", ".join(parts)
 
 
+_SAMARA_KEYWORDS = ("самар", "чапаевск", "новокуйбышевск", "сызрань", "тольятти", "курумоч")
+
+
+def _parse_geocode_results(
+    members: list,
+    items: list[dict],
+    n: int,
+    filter_by_region: bool = True,
+) -> None:
+    """
+    Парсит список featureMember из ответа Яндекса и добавляет результаты в items.
+    filter_by_region=True — пропускает адреса не из Самарской обл. (по _SAMARA_KEYWORDS).
+    filter_by_region=False — принимает любые адреса.
+    Изменяет items на месте, останавливается при len(items) >= n.
+    """
+    for member in members:
+        if len(items) >= n:
+            break
+        geo_obj = member.get("GeoObject", {})
+        pos = geo_obj.get("Point", {}).get("pos", "")
+        parts = pos.split()
+        if len(parts) < 2:
+            continue
+        lon, lat = float(parts[0]), float(parts[1])
+        full_text = (
+            geo_obj.get("metaDataProperty", {})
+                   .get("GeocoderMetaData", {})
+                   .get("text", "")
+        )
+        if filter_by_region and not any(kw in full_text.lower() for kw in _SAMARA_KEYWORDS):
+            continue
+        display = _shorten_address(full_text) if full_text else ""
+        if not display:
+            continue
+        zone = get_zone_by_coords(lon, lat)
+        if zone is None:
+            zone = get_zone_by_address(full_text)
+        items.append({"display": display, "lon": lon, "lat": lat, "zone": zone})
+        print(
+            f"[SUGGEST] {display!r} → zone={zone!r}, lon={lon:.5f}, lat={lat:.5f}",
+            flush=True,
+        )
+
+
 async def geocode_suggest(query: str, n: int = 4) -> list[dict]:
     """
     Возвращает до n вариантов адреса с координатами (для кнопок-подсказок).
-    Использует гео-смещение к Чапаевску, чтобы сначала показывать местные адреса,
-    но не ограничивает — межгород (Курумоч, Самара) тоже найдёт.
+    1-й запрос: rspn=1 (строго в bbox Самарской обл.) + фильтр по региону — приоритет локальным.
+    Резервный запрос: если 1-й вернул 0 результатов — rspn=0 без фильтра региона (любой город).
     Каждый элемент: {"display": str, "lon": float, "lat": float, "zone": str|None}
     """
     original = (query or "").strip()
@@ -651,57 +695,50 @@ async def geocode_suggest(query: str, n: int = 4) -> list[dict]:
     if poi:
         return [{"display": poi["display"], "lon": poi["lon"], "lat": poi["lat"], "zone": poi["zone"]}]
 
+    _BASE_PARAMS = {
+        "apikey": YANDEX_GEOCODER_API_KEY,
+        "geocode": original,
+        "format": "json",
+        "results": n + 4,
+        "lang": "ru_RU",
+        "ll": "49.794231,52.984168",  # центр Чапаевска
+        "spn": "2.0,1.5",            # охват ~Самарская обл.
+    }
+
     items: list[dict] = []
+
     try:
         async with httpx.AsyncClient(timeout=6.0) as client:
+            # ── Запрос 1: строгий bbox + фильтр региона ──────────────────────
             resp = await client.get(
                 "https://geocode-maps.yandex.ru/1.x/",
-                params={
-                    "apikey": YANDEX_GEOCODER_API_KEY,
-                    "geocode": original,
-                    "format": "json",
-                    "results": n + 4,
-                    "lang": "ru_RU",
-                    "ll": "49.794231,52.984168",   # центр Чапаевска
-                    "spn": "2.0,1.5",              # охват ~Самарская обл.
-                    "rspn": "1",                   # строго внутри bbox
-                },
+                params={**_BASE_PARAMS, "rspn": "1"},
             )
-        resp.raise_for_status()
-        data = resp.json()
-        members = (
-            data.get("response", {})
-                .get("GeoObjectCollection", {})
-                .get("featureMember", [])
-        )
-        _SAMARA_KEYWORDS = ("самар", "чапаевск", "новокуйбышевск", "сызрань", "тольятти", "курумоч")
-        for member in members:
-            if len(items) >= n:
-                break
-            geo_obj = member.get("GeoObject", {})
-            pos = geo_obj.get("Point", {}).get("pos", "")
-            parts = pos.split()
-            if len(parts) < 2:
-                continue
-            lon, lat = float(parts[0]), float(parts[1])
-            full_text = (
-                geo_obj.get("metaDataProperty", {})
-                       .get("GeocoderMetaData", {})
-                       .get("text", "")
-                or original
+            resp.raise_for_status()
+            members = (
+                resp.json()
+                    .get("response", {})
+                    .get("GeoObjectCollection", {})
+                    .get("featureMember", [])
             )
-            # Фильтр: только Самарская область и крупные города региона
-            if not any(kw in full_text.lower() for kw in _SAMARA_KEYWORDS):
-                continue
-            display = _shorten_address(full_text)
-            zone = get_zone_by_coords(lon, lat)
-            if zone is None:
-                zone = get_zone_by_address(full_text)
-            items.append({"display": display, "lon": lon, "lat": lat, "zone": zone})
-            print(
-                f"[SUGGEST] {display!r} → zone={zone!r}, lon={lon:.5f}, lat={lat:.5f}",
-                flush=True,
-            )
+            _parse_geocode_results(members, items, n, filter_by_region=True)
+
+            # ── Запрос 2 (резерв): мягкое смещение, без фильтра региона ──────
+            if not items:
+                print(f"[SUGGEST] Локальный поиск пуст, fallback rspn=0 для {original!r}", flush=True)
+                resp2 = await client.get(
+                    "https://geocode-maps.yandex.ru/1.x/",
+                    params={**_BASE_PARAMS, "rspn": "0"},
+                )
+                resp2.raise_for_status()
+                members2 = (
+                    resp2.json()
+                         .get("response", {})
+                         .get("GeoObjectCollection", {})
+                         .get("featureMember", [])
+                )
+                _parse_geocode_results(members2, items, n, filter_by_region=False)
+
     except Exception as e:
         print(f"[GEO] geocode_suggest error ({type(e).__name__}): {e}", flush=True)
 
