@@ -389,6 +389,7 @@ async def admin_add_driver_start(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id not in ADMIN_IDS:
         await callback.answer("Нет доступа", show_alert=True)
         return
+    await _delete_driver_cards(callback.bot, callback.message.chat.id, state)
     await state.set_state(AdminAddDriver.waiting_for_tg_id)
     await state.update_data(registration_msg_id=callback.message.message_id)
     await callback.message.edit_text(
