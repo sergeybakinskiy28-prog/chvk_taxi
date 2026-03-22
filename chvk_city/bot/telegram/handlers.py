@@ -2588,17 +2588,33 @@ async def _offer_order_to_next(bot, order_id: int):
         designated = candidates[0]
 
     if designated is None:
-        # Все водители отклонили или заняты — уведомляем клиента
+        order_info["search_attempts"] = order_info.get("search_attempts", 0) + 1
         client_tg_id = order_info.get("client_tg_id")
-        if client_tg_id:
-            try:
-                await bot.send_message(
-                    client_tg_id,
-                    "😔 К сожалению, свободных водителей сейчас нет. Попробуйте заказать через несколько минут.",
-                )
-            except Exception:
-                pass
-        pending_order_data.pop(order_id, None)
+        if order_info["search_attempts"] == 1:
+            # Первая попытка — сообщаем клиенту что ищем
+            if client_tg_id:
+                try:
+                    await bot.send_message(
+                        client_tg_id,
+                        "🔍 Ищем свободного водителя... Пожалуйста, подождите.",
+                    )
+                except Exception:
+                    pass
+        if order_info["search_attempts"] >= 8:
+            # 2 минуты прошло — уведомляем об окончании поиска
+            if client_tg_id:
+                try:
+                    await bot.send_message(
+                        client_tg_id,
+                        "😔 К сожалению, за 2 минуты не удалось найти водителя. Ваш заказ остаётся активным — как только водитель появится на линии, мы отправим его вам.",
+                    )
+                except Exception:
+                    pass
+            pending_order_data.pop(order_id, None)
+            return
+        # Повторный поиск через 15 секунд
+        await asyncio.sleep(15)
+        asyncio.create_task(_offer_order_to_next(bot, order_id))
         return
 
     print(f"[QUEUE] Заказ #{order_id}: from_zone={from_zone!r}, выбран водитель {designated} (район: {driver_districts.get(designated, '?')})", flush=True)
@@ -2643,7 +2659,7 @@ async def _preorder_notify_task(
     except Exception as e:
         logger.error(f"Preorder client notify error: {e}")
     # Запускаем очередь
-    pending_order_data[order_id] = {"driver_msg": driver_msg, "is_intercity": is_intercity, "from_zone": from_zone, "client_tg_id": client_tg_id, "declined_drivers": set()}
+    pending_order_data[order_id] = {"driver_msg": driver_msg, "is_intercity": is_intercity, "from_zone": from_zone, "client_tg_id": client_tg_id, "declined_drivers": set(), "search_attempts": 0}
     asyncio.create_task(_offer_order_to_next(bot, order_id))
 
 
@@ -2781,7 +2797,7 @@ async def finalize_order(
                     main_card_id=sent_msg.message_id,
                 )
 
-                pending_order_data[order_id] = {"driver_msg": driver_msg, "is_intercity": is_intercity, "from_zone": data.get("from_zone"), "client_tg_id": passenger_telegram_id, "declined_drivers": set()}
+                pending_order_data[order_id] = {"driver_msg": driver_msg, "is_intercity": is_intercity, "from_zone": data.get("from_zone"), "client_tg_id": passenger_telegram_id, "declined_drivers": set(), "search_attempts": 0}
                 asyncio.create_task(_offer_order_to_next(message.bot, order_id))
 
             # Снимаем состояние FSM, но оставляем order_id в data для мягкой отмены/обработки UI
