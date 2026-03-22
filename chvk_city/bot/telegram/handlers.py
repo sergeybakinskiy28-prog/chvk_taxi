@@ -1192,11 +1192,17 @@ async def open_driver_cabinet_callback(callback: CallbackQuery, state: FSMContex
     except TelegramBadRequest:
         pass
 
-    sent = await callback.message.answer(
-        "💼 Кабинет водителя\n\n"
-        "Здесь вы можете выйти на смену или приостановить приём заказов.",
-        reply_markup=keyboards.get_driver_menu(),
-    )
+    drv_id = callback.from_user.id
+    is_online = drv_id in online_drivers
+    district = driver_districts.get(drv_id)
+    if is_online and district:
+        cab_text = f"💼 Кабинет водителя\n\n🟢 Вы на смене | Район: {district}\nОжидание заказов..."
+        cab_kb = keyboards.get_driver_menu_online()
+    else:
+        cab_text = "💼 Кабинет водителя\n\n🔴 Вы офлайн. Нажмите «▶️ Выйти на смену», чтобы начать принимать заказы."
+        cab_kb = keyboards.get_driver_menu_offline()
+
+    sent = await callback.message.answer(cab_text, reply_markup=cab_kb)
     await state.update_data(last_bot_msg_id=sent.message_id)
 
 
@@ -1533,12 +1539,17 @@ async def driver_cabinet_handler(message: Message, state: FSMContext):
         )
         return
 
-    await _send_single_window(
-        state, message,
-        "💼 Кабинет водителя\n\n"
-        "Здесь вы можете выйти на смену или приостановить приём заказов.",
-        reply_markup=keyboards.get_driver_menu(),
-    )
+    drv_id = message.from_user.id
+    is_online = drv_id in online_drivers
+    district = driver_districts.get(drv_id)
+    if is_online and district:
+        cab_text = f"💼 Кабинет водителя\n\n🟢 Вы на смене | Район: {district}\nОжидание заказов..."
+        cab_kb = keyboards.get_driver_menu_online()
+    else:
+        cab_text = "💼 Кабинет водителя\n\n🔴 Вы офлайн. Нажмите «▶️ Выйти на смену», чтобы начать принимать заказы."
+        cab_kb = keyboards.get_driver_menu_offline()
+
+    await _send_single_window(state, message, cab_text, reply_markup=cab_kb)
 
 
 @router.message(F.text == "⚙️ Админка")
@@ -1864,8 +1875,8 @@ async def driver_go_offline(message: Message, state: FSMContext):
     driver_districts.pop(drv_id, None)
     await _send_single_window(
         state, message,
-        "⏸ Вы ушли со смены. Новые заказы больше не будут приходить в этот чат.",
-        reply_markup=keyboards.get_driver_menu(),
+        "💤 Вы ушли со смены. Новые заказы больше не будут приходить.",
+        reply_markup=keyboards.get_driver_menu_offline(),
     )
 
 
@@ -1873,6 +1884,7 @@ async def driver_go_offline(message: Message, state: FSMContext):
 async def driver_balance_handler(message: Message, state: FSMContext):
     """Показывает текущий баланс водителя."""
     telegram_id = message.from_user.id
+    drv_kb = keyboards.get_driver_menu_online() if telegram_id in online_drivers else keyboards.get_driver_menu_offline()
     try:
         resp = await get_http_client().get(f"/taxi/driver/{telegram_id}/balance")
         if resp.status_code == 200:
@@ -1881,13 +1893,13 @@ async def driver_balance_handler(message: Message, state: FSMContext):
             await message.answer(
                 f"💰 Ваш баланс: <b>{sign}{balance:.2f} руб.</b>",
                 parse_mode="HTML",
-                reply_markup=keyboards.get_driver_menu(),
+                reply_markup=drv_kb,
             )
         else:
-            await message.answer("❌ Не удалось получить баланс.", reply_markup=keyboards.get_driver_menu())
+            await message.answer("❌ Не удалось получить баланс.", reply_markup=drv_kb)
     except Exception as e:
         logger.error(f"Failed to get balance for driver {telegram_id}: {e}")
-        await message.answer("❌ Ошибка при получении баланса.", reply_markup=keyboards.get_driver_menu())
+        await message.answer("❌ Ошибка при получении баланса.", reply_markup=drv_kb)
 
 
 @router.message(DriverShift.waiting_for_district, F.text)
@@ -1929,14 +1941,14 @@ async def driver_select_district(message: Message, state: FSMContext):
         if resp.status_code != 200:
             await message.answer(
                 "❌ Не удалось сохранить район. Попробуйте позже.",
-                reply_markup=keyboards.get_driver_menu(),
+                reply_markup=keyboards.get_driver_menu_offline(),
             )
             return
     except Exception as e:
         logger.error(f"Failed to set district for driver {message.from_user.id}: {e}")
         await message.answer(
             "❌ Ошибка при сохранении района. Попробуйте позже.",
-            reply_markup=keyboards.get_driver_menu(),
+            reply_markup=keyboards.get_driver_menu_offline(),
         )
         return
 
@@ -1952,7 +1964,7 @@ async def driver_select_district(message: Message, state: FSMContext):
                     f"Ваш баланс отрицательный: <b>{balance:.2f} руб.</b>\n\n"
                     "Пополните баланс у администратора.",
                     parse_mode="HTML",
-                    reply_markup=keyboards.get_driver_menu(),
+                    reply_markup=keyboards.get_driver_menu_offline(),
                 )
                 return
     except Exception as e:
@@ -1965,8 +1977,8 @@ async def driver_select_district(message: Message, state: FSMContext):
     driver_districts[drv_id] = district
     await state.clear()
     await message.answer(
-        f"✅ Вы встали в очередь в районе {district}. Ожидайте заказов.",
-        reply_markup=keyboards.get_driver_menu(),
+        f"🟢 Вы на смене | Район: {district}\nОжидание заказов...",
+        reply_markup=keyboards.get_driver_menu_online(),
     )
 
 

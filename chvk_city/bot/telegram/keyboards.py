@@ -70,6 +70,34 @@ def get_driver_menu():
     )
 
 
+def get_driver_menu_offline():
+    """Меню водителя в офлайн-режиме."""
+    buttons = [
+        [KeyboardButton(text="▶️ Выйти на смену")],
+        [KeyboardButton(text="💰 Мой баланс")],
+    ]
+    return ReplyKeyboardMarkup(
+        keyboard=buttons,
+        resize_keyboard=True,
+        is_persistent=True,
+        input_field_placeholder="Вы офлайн 👇",
+    )
+
+
+def get_driver_menu_online():
+    """Меню водителя в онлайн-режиме."""
+    buttons = [
+        [KeyboardButton(text="⏸ Уйти со смены")],
+        [KeyboardButton(text="💰 Мой баланс")],
+    ]
+    return ReplyKeyboardMarkup(
+        keyboard=buttons,
+        resize_keyboard=True,
+        is_persistent=True,
+        input_field_placeholder="Вы на смене 👇",
+    )
+
+
 def get_admin_menu():
     """
     Меню администратора.
