@@ -1306,12 +1306,16 @@ async def cmd_driver_handler(message: Message, state: FSMContext):
 
     if driver:
         if driver.is_approved:
-            await _send_single_window(
-                state, message,
-                "💼 Кабинет водителя\n\n"
-                "Здесь вы можете выйти на смену или приостановить приём заказов.",
-                reply_markup=keyboards.get_driver_menu(),
-            )
+            drv_id = message.from_user.id
+            is_online = drv_id in online_drivers
+            district = driver_districts.get(drv_id)
+            if is_online and district:
+                cab_text = f"💼 Кабинет водителя\n\n🟢 Вы на смене | Район: {district}\nОжидание заказов..."
+                cab_kb = keyboards.get_driver_menu_online()
+            else:
+                cab_text = "💼 Кабинет водителя\n\n🔴 Вы офлайн. Нажмите «▶️ Выйти на смену», чтобы начать принимать заказы."
+                cab_kb = keyboards.get_driver_menu_offline()
+            await _send_single_window(state, message, cab_text, reply_markup=cab_kb)
             return
         await _send_single_window(
             state, message,
@@ -1902,6 +1906,21 @@ async def driver_balance_handler(message: Message, state: FSMContext):
     except Exception as e:
         logger.error(f"Failed to get balance for driver {telegram_id}: {e}")
         await message.answer("❌ Ошибка при получении баланса.", reply_markup=drv_kb)
+
+
+@router.message(F.text == "📍 Сменить район")
+async def driver_change_district(message: Message, state: FSMContext):
+    telegram_id = message.from_user.id
+    if telegram_id not in online_drivers:
+        await message.answer("Вы не на смене. Сначала выйдите на смену.", reply_markup=keyboards.get_driver_menu_offline())
+        return
+    await state.set_state(DriverShift.waiting_for_district)
+    await _send_single_window(
+        state, message,
+        "<b>Выберите вашу новую локацию (стоянку):</b>",
+        reply_markup=keyboards.get_driver_districts_keyboard(),
+        parse_mode="HTML",
+    )
 
 
 @router.message(DriverShift.waiting_for_district, F.text)

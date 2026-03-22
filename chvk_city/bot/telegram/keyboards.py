@@ -87,6 +87,7 @@ def get_driver_menu_offline():
 def get_driver_menu_online():
     """Меню водителя в онлайн-режиме."""
     buttons = [
+        [KeyboardButton(text="📍 Сменить район")],
         [KeyboardButton(text="⏸ Уйти со смены")],
         [KeyboardButton(text="💰 Мой баланс")],
     ]
