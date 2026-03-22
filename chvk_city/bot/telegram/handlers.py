@@ -45,10 +45,27 @@ driver_queue: list[int] = []
 pending_offers: dict[int, int] = {}
 # order_id -> asyncio.Task (таймер предложения)
 offer_tasks: dict[int, asyncio.Task] = {}
-# order_id -> {driver_msg, is_intercity}
+# order_id -> {driver_msg, is_intercity, from_zone}
 pending_order_data: dict[int, dict] = {}
+# driver_tg_id -> текущий район водителя
+driver_districts: dict[int, str] = {}
 
 PENALTY_AMOUNT = 7.5
+
+NEIGHBOR_ZONES: dict[str, list[str]] = {
+    "Губашево":          ["Проспект", "30-й"],
+    "Проспект":          ["Губашево", "30-й", "Центр"],
+    "30-й":              ["Губашево", "Проспект", "Центр"],
+    "Центр":             ["Проспект", "30-й", "Луч", "Берсол", "Владимир"],
+    "Луч":               ["Центр", "Берсол"],
+    "Берсол":            ["Центр", "Луч", "Владимир"],
+    "Владимир":          ["Центр", "Берсол", "Титовка (Начало)"],
+    "Титовка (Начало)":  ["Владимир", "Титовка (Конец)", "Центр"],
+    "Титовка (Конец)":   ["Титовка (Начало)", "Садовка"],
+    "Садовка":           ["Титовка (Конец)", "Нагорный"],
+    "Нагорный":          ["Садовка", "Центр"],
+    "Озон":              ["Проспект", "Губашево"],
+}
 OFFER_TIMEOUT_CITY = 20
 OFFER_TIMEOUT_INTERCITY = 40
 
@@ -1844,6 +1861,7 @@ async def driver_go_offline(message: Message, state: FSMContext):
     online_drivers.discard(drv_id)
     if drv_id in driver_queue:
         driver_queue.remove(drv_id)
+    driver_districts.pop(drv_id, None)
     await _send_single_window(
         state, message,
         "⏸ Вы ушли со смены. Новые заказы больше не будут приходить в этот чат.",
@@ -1944,6 +1962,7 @@ async def driver_select_district(message: Message, state: FSMContext):
     drv_id = message.from_user.id
     if drv_id not in driver_queue:
         driver_queue.append(drv_id)
+    driver_districts[drv_id] = district
     await state.clear()
     await message.answer(
         f"✅ Вы встали в очередь в районе {district}. Ожидайте заказов.",
@@ -2512,16 +2531,37 @@ async def _offer_order_to_next(bot, order_id: int):
     is_intercity = order_info.get("is_intercity", False)
     timeout = OFFER_TIMEOUT_INTERCITY if is_intercity else OFFER_TIMEOUT_CITY
 
-    # Найти первого свободного водителя
-    designated = None
+    from_zone = order_info.get("from_zone")
+
+    # Найти подходящего водителя с приоритетом по району
     busy_ids = set(pending_offers.values())
-    for drv_id in driver_queue:
-        if drv_id not in busy_ids:
-            designated = drv_id
-            break
+    candidates = [d for d in driver_queue if d not in busy_ids]
+
+    designated = None
+
+    if from_zone and candidates:
+        # Приоритет 1: водитель в том же районе
+        for drv_id in candidates:
+            if driver_districts.get(drv_id) == from_zone:
+                designated = drv_id
+                break
+
+        # Приоритет 2: водитель в соседнем районе
+        if designated is None:
+            neighbors = NEIGHBOR_ZONES.get(from_zone, [])
+            for drv_id in candidates:
+                if driver_districts.get(drv_id) in neighbors:
+                    designated = drv_id
+                    break
+
+    # Приоритет 3: любой свободный по очереди
+    if designated is None and candidates:
+        designated = candidates[0]
 
     if designated is None:
         return  # все заняты или очередь пуста
+
+    print(f"[QUEUE] Заказ #{order_id}: from_zone={from_zone!r}, выбран водитель {designated} (район: {driver_districts.get(designated, '?')})", flush=True)
 
     pending_offers[order_id] = designated
 
@@ -2546,7 +2586,7 @@ async def _offer_order_to_next(bot, order_id: int):
 
 
 async def _preorder_notify_task(
-    bot, order_id: int, client_tg_id: int, driver_msg: str, is_intercity: bool, delay: float
+    bot, order_id: int, client_tg_id: int, driver_msg: str, is_intercity: bool, delay: float, from_zone: str | None = None
 ):
     """Ждёт до времени предзаказа, затем уведомляет водителей."""
     if delay > 0:
@@ -2572,7 +2612,7 @@ async def _preorder_notify_task(
     except Exception as e:
         logger.error(f"Preorder driver chat error: {e}")
     # Запускаем очередь
-    pending_order_data[order_id] = {"driver_msg": driver_msg, "is_intercity": is_intercity}
+    pending_order_data[order_id] = {"driver_msg": driver_msg, "is_intercity": is_intercity, "from_zone": from_zone}
     asyncio.create_task(_offer_order_to_next(bot, order_id))
 
 
@@ -2687,6 +2727,7 @@ async def finalize_order(
                     _preorder_notify_task(
                         message.bot, order_id, passenger_telegram_id,
                         driver_msg, is_intercity, delay,
+                        from_zone=data.get("from_zone"),
                     )
                 )
                 preorder_tasks[order_id] = task
@@ -2718,7 +2759,7 @@ async def finalize_order(
                     )
                 except Exception as e:
                     logger.error(f"Ошибка отправки в чат водителей ({settings.DRIVER_CHAT_ID}): {e}")
-                pending_order_data[order_id] = {"driver_msg": driver_msg, "is_intercity": is_intercity}
+                pending_order_data[order_id] = {"driver_msg": driver_msg, "is_intercity": is_intercity, "from_zone": data.get("from_zone")}
                 asyncio.create_task(_offer_order_to_next(message.bot, order_id))
 
             # Снимаем состояние FSM, но оставляем order_id в data для мягкой отмены/обработки UI
