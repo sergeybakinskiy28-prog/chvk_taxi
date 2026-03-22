@@ -384,7 +384,6 @@ async def _get_menu_for_user(telegram_id: int) -> ReplyKeyboardMarkup:
     try:
         async with async_session() as db:
             driver = await TaxiService.get_driver(db, telegram_id)
-            print(f"DEBUG MENU: telegram_id={telegram_id}, driver={driver}, is_approved={driver.is_approved if driver else None}, deleted_at={getattr(driver, 'deleted_at', None)}", flush=True)
             if driver:
                 if driver.is_approved:
                     is_driver = True
@@ -960,12 +959,18 @@ async def cmd_start(message: Message, state: FSMContext):
         logger.error(f"Failed to register user {user_id}: {e}")
         print(f"[API] register user: {e}", flush=True)
 
+    is_driver, _ = await _get_driver_flags(user_id)
+    is_admin = user_id in ADMIN_IDS
+
     try:
-        start_kb = (
-            keyboards.get_start_order_inline_keyboard_admin()
-            if user_id in ADMIN_IDS
-            else keyboards.get_start_order_inline_keyboard()
-        )
+        if is_admin and is_driver:
+            start_kb = keyboards.get_start_order_inline_keyboard_admin_driver()
+        elif is_admin:
+            start_kb = keyboards.get_start_order_inline_keyboard_admin()
+        elif is_driver:
+            start_kb = keyboards.get_start_order_inline_keyboard_driver()
+        else:
+            start_kb = keyboards.get_start_order_inline_keyboard()
         welcome = await message.answer(
             "Привет! Я помогу вам заказать такси. Нажмите на кнопку ниже, чтобы начать.",
             reply_markup=start_kb,
@@ -1147,6 +1152,35 @@ async def start_order_inline_callback(callback: CallbackQuery, state: FSMContext
         state,
         callback.from_user.id,
     )
+
+
+@router.callback_query(F.data == "open_driver_cabinet")
+async def open_driver_cabinet_callback(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    telegram_id = callback.from_user.id
+    try:
+        async with async_session() as db:
+            driver = await TaxiService.get_driver(db, telegram_id)
+    except Exception as e:
+        logger.error(f"Failed to load driver cabinet for {telegram_id}: {e}", exc_info=True)
+        await callback.message.answer("❌ Временно недоступно. Попробуйте позже.")
+        return
+
+    if not driver or not driver.is_approved:
+        await callback.message.answer("❌ Кабинет водителя недоступен.")
+        return
+
+    try:
+        await callback.message.delete()
+    except TelegramBadRequest:
+        pass
+
+    sent = await callback.message.answer(
+        "💼 Кабинет водителя\n\n"
+        "Здесь вы можете выйти на смену или приостановить приём заказов.",
+        reply_markup=keyboards.get_driver_menu(),
+    )
+    await state.update_data(last_bot_msg_id=sent.message_id)
 
 
 @router.message(F.text == "🗂 Мои заказы")

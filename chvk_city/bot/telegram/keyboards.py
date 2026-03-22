@@ -126,6 +126,25 @@ def get_start_order_inline_keyboard_admin():
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+def get_start_order_inline_keyboard_driver():
+    """Стартовая клавиатура для водителя — добавляет кнопку «💼 Кабинет водителя»."""
+    buttons = [
+        [InlineKeyboardButton(text="🚖 Заказать такси", callback_data="start_order_inline")],
+        [InlineKeyboardButton(text="💼 Кабинет водителя", callback_data="open_driver_cabinet")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_start_order_inline_keyboard_admin_driver():
+    """Стартовая клавиатура для администратора-водителя."""
+    buttons = [
+        [InlineKeyboardButton(text="🚖 Заказать такси", callback_data="start_order_inline")],
+        [InlineKeyboardButton(text="💼 Кабинет водителя", callback_data="open_driver_cabinet")],
+        [InlineKeyboardButton(text="⚙️ Управление", callback_data="open_admin_panel")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
 def get_admin_panel_inline_keyboard():
     """Inline-клавиатура главной страницы админ-панели."""
     buttons = [
