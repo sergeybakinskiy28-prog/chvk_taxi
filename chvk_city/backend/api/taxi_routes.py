@@ -8,6 +8,7 @@ from chvk_city.backend.models.order import Order
 from sqlalchemy import select
 from pydantic import BaseModel
 from typing import List
+import datetime
 
 router = APIRouter(prefix="/taxi", tags=["taxi"])
 
@@ -810,6 +811,53 @@ async def get_archive_orders(page: int = 0, page_size: int = 10, db: AsyncSessio
             }
             for row in rows
         ],
+    }
+
+
+@router.get("/driver/{telegram_id}/orders")
+async def get_driver_orders(telegram_id: int, db: AsyncSession = Depends(get_db)):
+    """История завершённых заказов водителя с разбивкой на сегодня и всё время."""
+    driver_result = await db.execute(
+        select(Driver).join(User, Driver.user_id == User.id).where(User.telegram_id == telegram_id)
+    )
+    driver = driver_result.scalar_one_or_none()
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver not found")
+
+    stmt = (
+        select(Order)
+        .where(Order.driver_id == driver.id, Order.status == "completed")
+        .order_by(Order.created_at.desc())
+    )
+    result = await db.execute(stmt)
+    orders = result.scalars().all()
+
+    tz_samara = datetime.timezone(datetime.timedelta(hours=4))
+    today = datetime.datetime.now(tz_samara).date()
+
+    today_orders = []
+    today_total = 0.0
+    all_total = 0.0
+
+    for o in orders:
+        price = o.price or 0.0
+        all_total += price
+        order_date = o.created_at.replace(tzinfo=datetime.timezone.utc).astimezone(tz_samara).date() if o.created_at else None
+        if order_date == today:
+            today_total += price
+            today_orders.append({
+                "from_address": o.from_address,
+                "to_address": o.to_address,
+                "price": price,
+                "created_at": o.created_at.isoformat() if o.created_at else "",
+            })
+
+    return {
+        "today_orders": today_orders,
+        "today_total": today_total,
+        "today_count": len(today_orders),
+        "all_total": all_total,
+        "all_count": len(orders),
     }
 
 

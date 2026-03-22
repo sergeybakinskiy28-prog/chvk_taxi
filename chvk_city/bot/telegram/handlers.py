@@ -1908,6 +1908,48 @@ async def driver_balance_handler(message: Message, state: FSMContext):
         await message.answer("❌ Ошибка при получении баланса.", reply_markup=drv_kb)
 
 
+@router.message(F.text == "📊 Мои поездки")
+async def driver_trips_handler(message: Message, state: FSMContext):
+    """История завершённых поездок водителя."""
+    telegram_id = message.from_user.id
+    drv_kb = keyboards.get_driver_menu_online() if telegram_id in online_drivers else keyboards.get_driver_menu_offline()
+    try:
+        resp = await get_http_client().get(f"/taxi/driver/{telegram_id}/orders")
+        if resp.status_code != 200:
+            await message.answer("❌ Не удалось получить историю поездок.", reply_markup=drv_kb)
+            return
+        data = resp.json()
+    except Exception as e:
+        logger.error(f"Failed to get driver orders for {telegram_id}: {e}")
+        await message.answer("❌ Ошибка при получении истории поездок.", reply_markup=drv_kb)
+        return
+
+    today_orders = data.get("today_orders", [])
+    today_total = data.get("today_total", 0.0)
+    today_count = data.get("today_count", 0)
+    all_total = data.get("all_total", 0.0)
+    all_count = data.get("all_count", 0)
+
+    if all_count == 0:
+        await message.answer("📊 У вас пока нет завершённых поездок.", reply_markup=drv_kb)
+        return
+
+    if today_count == 0:
+        today_text = "📊 Сегодня поездок ещё не было.\n\n"
+    else:
+        lines = []
+        for i, o in enumerate(today_orders, 1):
+            price = o.get("price") or 0.0
+            lines.append(f"{i}. {o.get('from_address', '—')} → {o.get('to_address', '—')} | {price:.0f} руб.")
+        today_text = "📊 Ваши поездки за сегодня:\n\n" + "\n".join(lines) + "\n\n"
+
+    summary = (
+        f"💰 Итого за сегодня: {today_total:.0f} руб. ({today_count} поездок)\n"
+        f"📅 За всё время: {all_total:.0f} руб. ({all_count} поездок)"
+    )
+    await message.answer(today_text + summary, reply_markup=drv_kb)
+
+
 @router.message(F.text == "📍 Сменить район")
 async def driver_change_district(message: Message, state: FSMContext):
     telegram_id = message.from_user.id

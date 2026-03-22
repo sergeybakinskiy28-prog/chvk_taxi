@@ -74,6 +74,7 @@ def get_driver_menu_offline():
     """Меню водителя в офлайн-режиме."""
     buttons = [
         [KeyboardButton(text="▶️ Выйти на смену")],
+        [KeyboardButton(text="📊 Мои поездки")],
         [KeyboardButton(text="💰 Мой баланс")],
     ]
     return ReplyKeyboardMarkup(
@@ -88,6 +89,7 @@ def get_driver_menu_online():
     """Меню водителя в онлайн-режиме."""
     buttons = [
         [KeyboardButton(text="📍 Сменить район")],
+        [KeyboardButton(text="📊 Мои поездки")],
         [KeyboardButton(text="⏸ Уйти со смены")],
         [KeyboardButton(text="💰 Мой баланс")],
     ]
