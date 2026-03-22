@@ -2616,23 +2616,28 @@ async def _handle_offer_timeout(bot, order_id: int, driver_tg_id: int, timeout: 
     # Штраф
     try:
         await get_http_client().post(f"/taxi/driver/{driver_tg_id}/penalty")
-        await bot.send_message(
-            chat_id=driver_tg_id,
-            text=f"⏰ Время вышло! С вашего баланса списано {PENALTY_AMOUNT:.0f} руб. за пропуск заказа.",
-        )
     except Exception as e:
         logger.error(f"Failed to apply timeout penalty to driver {driver_tg_id}: {e}")
-    # Обновляем сообщение с заказом — убираем кнопки, помечаем как пропущенный
+    # Обновляем сообщение с заказом — убираем кнопки, объединяем штраф и статус
     order_info = pending_order_data.get(order_id, {})
     msg_id = order_info.get(f"offer_msg_{driver_tg_id}")
+    penalty_text = f"❌ Заказ #{order_id} пропущен — передан другому водителю.\n\n💸 С вашего баланса списано {PENALTY_AMOUNT:.0f} руб. за пропуск заказа."
     if msg_id:
         try:
             await bot.edit_message_text(
                 chat_id=driver_tg_id,
                 message_id=msg_id,
-                text=f"❌ Заказ #{order_id} пропущен — передан другому водителю.",
+                text=penalty_text,
                 reply_markup=None,
             )
+        except Exception:
+            try:
+                await bot.send_message(chat_id=driver_tg_id, text=penalty_text)
+            except Exception:
+                pass
+    else:
+        try:
+            await bot.send_message(chat_id=driver_tg_id, text=penalty_text)
         except Exception:
             pass
     # В конец очереди
