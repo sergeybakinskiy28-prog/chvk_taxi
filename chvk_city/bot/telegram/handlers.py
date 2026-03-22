@@ -2612,8 +2612,23 @@ async def _offer_order_to_next(bot, order_id: int):
 
     designated = None
 
-    # Приоритет 0: водитель, который сейчас везёт клиента в нужный район (бронь)
-    if from_zone and not order_info.get("reserved_for"):
+    if from_zone and candidates:
+        # Приоритет 1: свободный водитель в том же районе
+        for drv_id in candidates:
+            if driver_districts.get(drv_id) == from_zone:
+                designated = drv_id
+                break
+
+        # Приоритет 2: свободный водитель в соседнем районе
+        if designated is None:
+            neighbors = NEIGHBOR_ZONES.get(from_zone, [])
+            for drv_id in candidates:
+                if driver_districts.get(drv_id) in neighbors:
+                    designated = drv_id
+                    break
+
+    # Приоритет 3: бронь для водителя, который едет в нужный район (занят, но скоро будет там)
+    if designated is None and from_zone and not order_info.get("reserved_for"):
         for drv_id in list(driver_queue):
             if drv_id in declined:
                 continue
@@ -2624,22 +2639,7 @@ async def _offer_order_to_next(bot, order_id: int):
                 asyncio.create_task(_reservation_timeout(bot, order_id, 120))
                 return
 
-    if from_zone and candidates:
-        # Приоритет 1: водитель в том же районе
-        for drv_id in candidates:
-            if driver_districts.get(drv_id) == from_zone:
-                designated = drv_id
-                break
-
-        # Приоритет 2: водитель в соседнем районе
-        if designated is None:
-            neighbors = NEIGHBOR_ZONES.get(from_zone, [])
-            for drv_id in candidates:
-                if driver_districts.get(drv_id) in neighbors:
-                    designated = drv_id
-                    break
-
-    # Приоритет 3: любой свободный по очереди
+    # Приоритет 4: любой свободный по очереди
     if designated is None and candidates:
         designated = candidates[0]
 
