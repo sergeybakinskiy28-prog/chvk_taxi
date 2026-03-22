@@ -2642,16 +2642,6 @@ async def _preorder_notify_task(
         )
     except Exception as e:
         logger.error(f"Preorder client notify error: {e}")
-    # Отправляем в чат водителей
-    try:
-        await bot.send_message(
-            settings.DRIVER_CHAT_ID,
-            driver_msg,
-            reply_markup=keyboards.get_accept_order_keyboard(order_id),
-            parse_mode="HTML",
-        )
-    except Exception as e:
-        logger.error(f"Preorder driver chat error: {e}")
     # Запускаем очередь
     pending_order_data[order_id] = {"driver_msg": driver_msg, "is_intercity": is_intercity, "from_zone": from_zone, "client_tg_id": client_tg_id, "declined_drivers": set()}
     asyncio.create_task(_offer_order_to_next(bot, order_id))
@@ -2791,15 +2781,6 @@ async def finalize_order(
                     main_card_id=sent_msg.message_id,
                 )
 
-                try:
-                    await message.bot.send_message(
-                        settings.DRIVER_CHAT_ID,
-                        driver_msg,
-                        reply_markup=keyboards.get_accept_order_keyboard(order_id),
-                        parse_mode="HTML",
-                    )
-                except Exception as e:
-                    logger.error(f"Ошибка отправки в чат водителей ({settings.DRIVER_CHAT_ID}): {e}")
                 pending_order_data[order_id] = {"driver_msg": driver_msg, "is_intercity": is_intercity, "from_zone": data.get("from_zone"), "client_tg_id": passenger_telegram_id, "declined_drivers": set()}
                 asyncio.create_task(_offer_order_to_next(message.bot, order_id))
 
