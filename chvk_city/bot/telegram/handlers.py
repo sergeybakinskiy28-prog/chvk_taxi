@@ -49,6 +49,8 @@ offer_tasks: dict[int, asyncio.Task] = {}
 pending_order_data: dict[int, dict] = {}
 # driver_tg_id -> текущий район водителя
 driver_districts: dict[int, str] = {}
+# driver_tg_id -> район назначения текущего заказа (куда везёт клиента)
+driver_destination_zone: dict[int, str | None] = {}
 
 PENALTY_AMOUNT = 7.5
 
@@ -1907,6 +1909,7 @@ async def driver_select_district(message: Message, state: FSMContext):
     """
     Водитель выбирает район. Сохраняем район в бэкенд и отмечаем водителя онлайн.
     """
+    driver_destination_zone.pop(message.from_user.id, None)
     text = message.text
     allowed = {
         "📍 Губашево": "Губашево",
@@ -2562,6 +2565,16 @@ async def _handle_offer_timeout(bot, order_id: int, driver_tg_id: int, timeout: 
     asyncio.create_task(_offer_order_to_next(bot, order_id))
 
 
+async def _reservation_timeout(bot, order_id: int, delay: int = 120):
+    """Если водитель не завершил заказ за delay сек — снимаем бронь и ищем другого."""
+    await asyncio.sleep(delay)
+    order_info = pending_order_data.get(order_id)
+    if order_info and order_info.get("reserved_for"):
+        reserved_drv = order_info.pop("reserved_for")
+        print(f"[RESERVE] Таймаут брони для заказа #{order_id} (водитель {reserved_drv}) — ищем другого", flush=True)
+        asyncio.create_task(_offer_order_to_next(bot, order_id))
+
+
 async def _offer_order_to_next(bot, order_id: int):
     """Предложить заказ следующему водителю в очереди."""
     order_info = pending_order_data.get(order_id)
@@ -2579,6 +2592,18 @@ async def _offer_order_to_next(bot, order_id: int):
     candidates = [d for d in driver_queue if d not in busy_ids and d not in declined]
 
     designated = None
+
+    # Приоритет 0: водитель, который сейчас везёт клиента в нужный район (бронь)
+    if from_zone and not order_info.get("reserved_for"):
+        for drv_id in list(driver_queue):
+            if drv_id in declined:
+                continue
+            dest_zone = driver_destination_zone.get(drv_id)
+            if dest_zone and dest_zone == from_zone:
+                order_info["reserved_for"] = drv_id
+                print(f"[RESERVE] Заказ #{order_id}: забронирован для водителя {drv_id} (едет в {dest_zone})", flush=True)
+                asyncio.create_task(_reservation_timeout(bot, order_id, 120))
+                return
 
     if from_zone and candidates:
         # Приоритет 1: водитель в том же районе
@@ -2888,6 +2913,13 @@ async def eta_select_callback(callback: CallbackQuery, state: FSMContext):
             pending_offers.pop(order_id, None)
             pending_order_data.pop(order_id, None)
 
+            # Сохраняем район назначения для умного распределения следующего заказа
+            to_address = order.get("to_address")
+            if to_address:
+                to_zone = get_zone_by_address(to_address)
+                driver_destination_zone[driver_telegram_id] = to_zone
+                print(f"[ROUTE] Водитель {driver_telegram_id} везёт в зону {to_zone!r} (адрес: {to_address!r})", flush=True)
+
             await callback.answer("Вы приняли заказ! ✅")
             try:
                 await callback.message.edit_text(
@@ -3034,6 +3066,17 @@ async def complete_order_callback(callback: CallbackQuery, state: FSMContext):
         if response.status_code == 200:
             data = response.json()
             client_chat_id = data.get("client_telegram_id")
+
+            driver_tg_id = callback.from_user.id
+            driver_destination_zone.pop(driver_tg_id, None)
+
+            # Проверяем есть ли забронированный заказ для этого водителя
+            for oid, oinfo in list(pending_order_data.items()):
+                if oinfo.get("reserved_for") == driver_tg_id:
+                    oinfo.pop("reserved_for", None)
+                    print(f"[RESERVE] Водитель {driver_tg_id} завершил заказ — запускаем забронированный заказ #{oid}", flush=True)
+                    asyncio.create_task(_offer_order_to_next(callback.bot, oid))
+                    break
 
             # State-based UI: EDIT активного сообщения → чек с оценкой (финализация)
             if client_chat_id is not None:
