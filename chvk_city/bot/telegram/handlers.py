@@ -2622,6 +2622,19 @@ async def _handle_offer_timeout(bot, order_id: int, driver_tg_id: int, timeout: 
         )
     except Exception as e:
         logger.error(f"Failed to apply timeout penalty to driver {driver_tg_id}: {e}")
+    # Обновляем сообщение с заказом — убираем кнопки, помечаем как пропущенный
+    order_info = pending_order_data.get(order_id, {})
+    msg_id = order_info.get(f"offer_msg_{driver_tg_id}")
+    if msg_id:
+        try:
+            await bot.edit_message_text(
+                chat_id=driver_tg_id,
+                message_id=msg_id,
+                text=f"❌ Заказ #{order_id} пропущен — передан другому водителю.",
+                reply_markup=None,
+            )
+        except Exception:
+            pass
     # В конец очереди
     if driver_tg_id in driver_queue:
         driver_queue.remove(driver_tg_id)
@@ -3521,7 +3534,10 @@ async def ignore_order_callback(callback: CallbackQuery):
         await callback.answer("Заказ скрыт")
 
     try:
-        await callback.message.delete()
+        await callback.message.edit_text(
+            f"❌ Заказ #{order_id} отклонён.",
+            reply_markup=None,
+        )
     except Exception:
         pass
 
