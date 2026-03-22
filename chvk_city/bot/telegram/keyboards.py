@@ -150,6 +150,7 @@ def get_admin_panel_inline_keyboard():
     buttons = [
         [InlineKeyboardButton(text="📋 Текущие заказы", callback_data="admin_current_orders")],
         [InlineKeyboardButton(text="🟢 Водители на линии", callback_data="admin_online_drivers")],
+        [InlineKeyboardButton(text="💰 Пополнить баланс водителя", callback_data="admin_topup_balance")],
         [InlineKeyboardButton(text="📦 Архив заказов", callback_data="admin_archive_page:0")],
         [InlineKeyboardButton(text="🚕 Водители", callback_data="admin_drivers_menu")],
         [InlineKeyboardButton(text="⬅️ Главное меню", callback_data="admin_to_main")],
@@ -208,6 +209,21 @@ def get_admin_drivers_back_keyboard():
 def get_admin_back_keyboard():
     """Кнопка «⬅️ Назад» для подстраниц админ-панели."""
     buttons = [[InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back")]]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_admin_topup_cancel_keyboard():
+    """Кнопка отмены для FSM пополнения баланса."""
+    buttons = [[InlineKeyboardButton(text="❌ Отмена", callback_data="admin_topup_cancel")]]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_admin_topup_confirm_keyboard():
+    """Подтверждение пополнения баланса водителя."""
+    buttons = [
+        [InlineKeyboardButton(text="✅ Подтвердить", callback_data="admin_confirm_topup")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_topup_cancel")],
+    ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 

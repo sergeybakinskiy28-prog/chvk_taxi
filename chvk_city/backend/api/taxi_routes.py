@@ -552,6 +552,19 @@ async def apply_driver_penalty(tg_id: int, db: AsyncSession = Depends(get_db)):
     return {"balance": new_balance}
 
 
+class DriverTopup(BaseModel):
+    amount: float
+
+
+@router.post("/driver/{tg_id}/topup")
+async def topup_driver_balance(tg_id: int, data: DriverTopup, db: AsyncSession = Depends(get_db)):
+    """Пополнение баланса водителя администратором."""
+    if data.amount <= 0:
+        raise HTTPException(status_code=400, detail="Сумма должна быть больше 0")
+    new_balance = await TaxiService.update_driver_balance(db, tg_id, data.amount)
+    return {"status": "ok", "new_balance": new_balance}
+
+
 @router.post("/order/{order_id}/deduct_commission")
 async def deduct_commission(order_id: int, db: AsyncSession = Depends(get_db)):
     """Списать 5% комиссии с водителя после завершения заказа."""

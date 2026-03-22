@@ -2,7 +2,7 @@ from aiogram import Router, F
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import StateFilter
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 
 from chvk_city.bot.telegram.constants import ADMIN_IDS
@@ -19,6 +19,12 @@ class AdminAddDriver(StatesGroup):
     waiting_for_car_color = State()
     waiting_for_car_number = State()
     waiting_for_phone = State()
+    waiting_for_confirm = State()
+
+
+class AdminTopupBalance(StatesGroup):
+    waiting_for_driver_id = State()
+    waiting_for_amount = State()
     waiting_for_confirm = State()
 
 STATUS_LABELS = {
@@ -313,6 +319,174 @@ async def admin_drivers_active_callback(callback: CallbackQuery, state: FSMConte
     )
 
 
+# ── Пополнение баланса водителя (FSM, single-window) ─────────────────────────
+
+@admin_router.callback_query(F.data == "admin_topup_balance")
+async def admin_topup_balance_start(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+
+    await callback.answer()
+
+    try:
+        resp = await get_http_client().get("/taxi/drivers/all")
+        drivers = resp.json() if resp.status_code == 200 else []
+    except Exception:
+        drivers = []
+
+    if not drivers:
+        await callback.message.edit_text(
+            "💰 Нет действующих водителей.",
+            reply_markup=keyboards.get_admin_back_keyboard(),
+        )
+        return
+
+    buttons = []
+    for d in drivers:
+        tg_id = d.get("telegram_id")
+        name = d.get("name") or f"ID {tg_id}"
+        car = f"{d.get('car_model', '')} {d.get('car_number', '')}".strip()
+        label = f"{name} ({car})" if car else name
+        buttons.append([InlineKeyboardButton(text=label, callback_data=f"topup_select_driver:{tg_id}")])
+    buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_back")])
+
+    await state.set_state(AdminTopupBalance.waiting_for_driver_id)
+    await state.update_data(topup_msg_id=callback.message.message_id)
+    await callback.message.edit_text(
+        "💰 <b>Пополнение баланса водителя</b>\n\nВыберите водителя:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+        parse_mode="HTML",
+    )
+
+
+@admin_router.callback_query(F.data.startswith("topup_select_driver:"))
+async def admin_topup_select_driver(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+
+    tg_id = int(callback.data.split(":")[1])
+
+    try:
+        resp = await get_http_client().get("/taxi/drivers/all")
+        drivers = resp.json() if resp.status_code == 200 else []
+    except Exception:
+        drivers = []
+    driver = next((d for d in drivers if d.get("telegram_id") == tg_id), None)
+    name = (driver.get("name") or f"ID {tg_id}") if driver else f"ID {tg_id}"
+
+    await state.update_data(topup_driver_tg_id=tg_id, topup_driver_name=name)
+    await state.set_state(AdminTopupBalance.waiting_for_amount)
+
+    data = await state.get_data()
+    msg_id = data.get("topup_msg_id")
+    await callback.answer()
+    await _edit_reg_msg(
+        callback.bot, callback.message.chat.id, msg_id,
+        f"💰 <b>Пополнение баланса</b>\n\nВодитель: <b>{name}</b>\n\nВведите сумму пополнения (в рублях):",
+        keyboards.get_admin_topup_cancel_keyboard(),
+    )
+
+
+@admin_router.message(StateFilter(AdminTopupBalance.waiting_for_amount))
+async def admin_topup_amount(message: Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+
+    text = (message.text or "").strip()
+    data = await state.get_data()
+    msg_id = data.get("topup_msg_id")
+    name = data.get("topup_driver_name", "—")
+
+    try:
+        await message.delete()
+    except TelegramBadRequest:
+        pass
+
+    try:
+        amount = float(text.replace(",", "."))
+        if amount <= 0:
+            raise ValueError
+    except ValueError:
+        await _edit_reg_msg(
+            message.bot, message.chat.id, msg_id,
+            f"⚠️ <b>Ошибка:</b> введите положительное число.\n\nВодитель: <b>{name}</b>\nВведите сумму пополнения (в рублях):",
+            keyboards.get_admin_topup_cancel_keyboard(),
+        )
+        return
+
+    await state.update_data(topup_amount=amount)
+    await state.set_state(AdminTopupBalance.waiting_for_confirm)
+    await _edit_reg_msg(
+        message.bot, message.chat.id, msg_id,
+        f"💰 <b>Подтвердите пополнение:</b>\n\n"
+        f"👤 Водитель: <b>{name}</b>\n"
+        f"💵 Сумма: <b>{amount:.0f} руб.</b>",
+        keyboards.get_admin_topup_confirm_keyboard(),
+    )
+
+
+@admin_router.callback_query(F.data == "admin_confirm_topup")
+async def admin_confirm_topup(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+
+    data = await state.get_data()
+    tg_id = data.get("topup_driver_tg_id")
+    name = data.get("topup_driver_name", "—")
+    amount = data.get("topup_amount", 0.0)
+    await state.clear()
+
+    try:
+        resp = await get_http_client().post(
+            f"/taxi/driver/{tg_id}/topup",
+            json={"amount": amount},
+        )
+        success = resp.status_code == 200
+        new_balance = resp.json().get("new_balance", 0.0) if success else 0.0
+    except Exception as e:
+        print(f"DEBUG: topup error: {e}", flush=True)
+        success = False
+        new_balance = 0.0
+
+    await callback.answer()
+
+    if success:
+        await callback.message.edit_text(
+            f"✅ Баланс водителя <b>{name}</b> пополнен на <b>{amount:.0f} руб.</b>\n"
+            f"Новый баланс: <b>{new_balance:.2f} руб.</b>",
+            reply_markup=keyboards.get_admin_back_keyboard(),
+            parse_mode="HTML",
+        )
+        try:
+            await callback.bot.send_message(
+                chat_id=tg_id,
+                text=f"💰 Ваш баланс пополнен на <b>{amount:.0f} руб.</b>\n"
+                     f"Текущий баланс: <b>{new_balance:.2f} руб.</b>",
+                parse_mode="HTML",
+            )
+        except Exception as e:
+            print(f"DEBUG: Failed to notify driver {tg_id}: {e}", flush=True)
+    else:
+        await callback.message.edit_text(
+            "❌ Не удалось пополнить баланс. Попробуйте снова.",
+            reply_markup=keyboards.get_admin_back_keyboard(),
+        )
+
+
+@admin_router.callback_query(F.data == "admin_topup_cancel")
+async def admin_topup_cancel(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer()
+        return
+    await state.clear()
+    await callback.message.edit_text(
+        "⚙️ Панель управления ЧВК Такси",
+        reply_markup=keyboards.get_admin_panel_inline_keyboard(),
+    )
+    await callback.answer()
 @admin_router.callback_query(F.data == "admin_drivers_requests")
 async def admin_drivers_requests_callback(callback: CallbackQuery):
     if callback.from_user.id not in ADMIN_IDS:
