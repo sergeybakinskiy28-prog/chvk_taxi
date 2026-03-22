@@ -184,6 +184,7 @@ def get_admin_panel_inline_keyboard():
         [InlineKeyboardButton(text="🟢 Водители на линии", callback_data="admin_online_drivers")],
         [InlineKeyboardButton(text="🚕 Водители", callback_data="admin_drivers_menu")],
         [InlineKeyboardButton(text="💰 Пополнить баланс водителя", callback_data="admin_topup_balance")],
+        [InlineKeyboardButton(text="⭐ Отзывы пассажиров", callback_data="admin_reviews")],
         [InlineKeyboardButton(text="⬅️ Главное меню", callback_data="admin_to_main")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -216,8 +217,11 @@ def get_admin_confirm_add_driver_keyboard():
 
 
 def get_admin_driver_card_keyboard(driver_id: int) -> InlineKeyboardMarkup:
-    """Кнопка удаления под карточкой водителя."""
-    buttons = [[InlineKeyboardButton(text="❌ Удалить водителя", callback_data=f"admin_delete_driver:{driver_id}")]]
+    """Кнопки под карточкой водителя."""
+    buttons = [
+        [InlineKeyboardButton(text="⭐ Отзывы", callback_data=f"admin_driver_reviews:{driver_id}")],
+        [InlineKeyboardButton(text="❌ Удалить водителя", callback_data=f"admin_delete_driver:{driver_id}")],
+    ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 

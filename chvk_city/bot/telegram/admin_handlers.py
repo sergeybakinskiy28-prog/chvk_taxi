@@ -567,6 +567,100 @@ async def admin_archive_noop(callback: CallbackQuery):
     await callback.answer()
 
 
+@admin_router.callback_query(F.data == "admin_reviews")
+async def admin_reviews_callback(callback: CallbackQuery):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer()
+        return
+    await callback.answer()
+    try:
+        resp = await get_http_client().get("/taxi/reviews/bad")
+        reviews = resp.json() if resp.status_code == 200 else []
+    except Exception:
+        reviews = []
+
+    if not reviews:
+        text = "⭐ Плохих отзывов нет — все пассажиры довольны!"
+    else:
+        lines = ["<b>⭐ Плохие отзывы:</b>\n"]
+        for r in reviews:
+            date_str = r.get("created_at", "")[:10] if r.get("created_at") else "—"
+            comment = r.get("comment")
+            line = f"⭐ {r['rating']} | Водитель: {r.get('driver_name', '—')}"
+            if comment:
+                line += f"\n💬 \"{comment}\""
+            line += f"\n📅 {date_str}"
+            lines.append(line)
+        text = "\n\n".join(lines)
+
+    await callback.message.edit_text(
+        text,
+        reply_markup=keyboards.get_admin_back_keyboard(),
+        parse_mode="HTML",
+    )
+
+
+@admin_router.callback_query(F.data.startswith("admin_driver_reviews:"))
+async def admin_driver_reviews_callback(callback: CallbackQuery):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer()
+        return
+    await callback.answer()
+    driver_id = int(callback.data.split(":")[1])
+
+    # Найти telegram_id водителя по его driver_id
+    try:
+        resp = await get_http_client().get("/taxi/drivers/all")
+        drivers = resp.json() if resp.status_code == 200 else []
+    except Exception:
+        drivers = []
+
+    driver_entry = next((d for d in drivers if d.get("id") == driver_id), None)
+    driver_name = driver_entry.get("name", "—") if driver_entry else "—"
+    telegram_id = driver_entry.get("telegram_id") if driver_entry else None
+
+    if not telegram_id:
+        await callback.message.edit_text(
+            "❌ Водитель не найден.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="⬅️ К списку водителей", callback_data="admin_drivers_active")
+            ]]),
+        )
+        return
+
+    try:
+        resp = await get_http_client().get(f"/taxi/driver/{telegram_id}/reviews")
+        data = resp.json() if resp.status_code == 200 else {}
+    except Exception:
+        data = {}
+
+    avg = data.get("average_rating", 0.0)
+    total = data.get("total_reviews", 0)
+    reviews = data.get("reviews", [])[:10]
+
+    header = f"<b>⭐ Отзывы водителя {driver_name}</b>\n\nСредний рейтинг: ⭐ {avg} ({total} поездок)\n"
+    if not reviews:
+        body = "\nОтзывов пока нет."
+    else:
+        lines = []
+        for r in reviews:
+            date_str = r.get("created_at", "")[:10] if r.get("created_at") else "—"
+            comment = r.get("comment")
+            line = f"⭐ {r['rating']} — {date_str}"
+            if comment:
+                line += f" | \"{comment}\""
+            lines.append(line)
+        body = "\n" + "\n".join(lines)
+
+    await callback.message.edit_text(
+        header + body,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="⬅️ К списку водителей", callback_data="admin_drivers_active")
+        ]]),
+        parse_mode="HTML",
+    )
+
+
 @admin_router.callback_query(F.data == "admin_back")
 async def admin_back_callback(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id not in ADMIN_IDS:
