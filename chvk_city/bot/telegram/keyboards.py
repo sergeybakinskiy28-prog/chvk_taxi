@@ -580,6 +580,13 @@ def get_rate_trip_keyboard(order_id: int):
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+def get_skip_review_keyboard():
+    """Кнопка «Пропустить» при запросе комментария к низкой оценке."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⏭ Пропустить", callback_data="skip_review_comment")],
+    ])
+
+
 def get_support_only_keyboard():
     """Клавиатура только с кнопкой «Поддержка» (для сообщений после оценки)."""
     return InlineKeyboardMarkup(inline_keyboard=[

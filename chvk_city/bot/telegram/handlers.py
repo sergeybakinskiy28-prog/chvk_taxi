@@ -95,6 +95,10 @@ class DriverShift(StatesGroup):
 class OwnerDeleteDriver(StatesGroup):
     waiting_for_driver_id = State()
 
+
+class ReviewFlow(StatesGroup):
+    waiting_for_comment = State()
+
 @router.message(OrderTaxi.waiting_for_from_address, F.text)
 async def process_from_address(message: Message, state: FSMContext):
     # Перехватываем /start: сбрасываем состояние и уходим в главное меню
@@ -3946,47 +3950,74 @@ async def rate_trip_callback(callback: CallbackQuery, state: FSMContext):
     callback.data имеет вид 'rate_{оценка}_{order_id}'.
     """
     parts = callback.data.split("_")
-    # parts[0] = 'rate', parts[1] = оценка, parts[2] = order_id (если нет подчёркиваний в середине)
     rating_str = parts[1] if len(parts) > 2 else "0"
     order_id = int(parts[-1])
+    rating = int(rating_str)
 
-    try:
-        # Финальная карточка заказа: маршрут, цена, водитель, оценка, кнопка Поддержка
-        order_resp = await get_http_client().get(f"/taxi/order/{order_id}")
-        ord_data = order_resp.json() if order_resp.status_code == 200 else {}
-        driver_name = ord_data.get("driver_name", "R S")
-        car_model = ord_data.get("car_model", "Гранта")
-        car_number = ord_data.get("car_number", "255")
-        route_text = _format_route_from_values(
-            ord_data.get("from_address"), ord_data.get("to_address")
-        )
-        price = ord_data.get("price")
-        price_str = f"{price:.0f} руб." if isinstance(price, (int, float)) else "—"
+    await callback.answer()
 
-        new_text = (
-            "✅ Поездка завершена!\n\n"
-            f"{route_text}\n\n"
-            f"🚖 Ваш заказ выполнил: {driver_name}\n"
-            f"🚗 Машина: {car_model}\n"
-            f"🔢 Номер: {car_number}\n\n"
-            f"💰 Стоимость: {price_str}\n\n"
-            f"⭐ Ваша оценка: {rating_str} из 5\n"
-            "🙏 Спасибо за отзыв!"
-        )
-
+    if rating <= 3:
+        # Плохая оценка — просим комментарий
+        await state.update_data(pending_rating=rating, pending_rating_order_id=order_id)
+        await state.set_state(ReviewFlow.waiting_for_comment)
         try:
-            support_kb = keyboards.get_support_only_keyboard()
             await callback.message.edit_text(
-                new_text,
-                reply_markup=support_kb,
+                f"Вы поставили оценку {rating} ⭐\n\n"
+                "Пожалуйста, напишите что пошло не так — это поможет улучшить сервис:",
+                reply_markup=keyboards.get_skip_review_keyboard(),
             )
         except Exception:
             pass
-    except Exception as e:
-        logger.exception(f"Error in rate_trip_callback: {e}")
-    await callback.answer("Спасибо за оценку!")
+        return
 
-    # Восстанавливаем главное меню с инлайн-кнопкой «Заказать такси»
+    # Хорошая оценка (4-5) — сразу показываем финальную карточку
+    await _finalize_rating(callback, state, order_id, rating, comment=None)
+
+
+async def _finalize_rating(callback: CallbackQuery, state: FSMContext, order_id: int, rating: int, comment: str | None):
+    """Отправить отзыв в API и показать финальную карточку."""
+    try:
+        order_resp = await get_http_client().get(f"/taxi/order/{order_id}")
+        ord_data = order_resp.json() if order_resp.status_code == 200 else {}
+    except Exception:
+        ord_data = {}
+
+    driver_name = ord_data.get("driver_name", "—")
+    car_model = ord_data.get("car_model", "—")
+    car_number = ord_data.get("car_number", "—")
+    route_text = _format_route_from_values(ord_data.get("from_address"), ord_data.get("to_address"))
+    price = ord_data.get("price")
+    price_str = f"{price:.0f} руб." if isinstance(price, (int, float)) else "—"
+    driver_id = ord_data.get("driver_id")
+
+    # Сохранить отзыв
+    if driver_id is not None:
+        try:
+            await get_http_client().post("/taxi/review", json={
+                "order_id": order_id,
+                "driver_id": driver_id,
+                "client_telegram_id": callback.from_user.id,
+                "rating": rating,
+                "comment": comment,
+            })
+        except Exception as e:
+            logger.error(f"Failed to save review for order {order_id}: {e}")
+
+    new_text = (
+        "✅ Поездка завершена!\n\n"
+        f"{route_text}\n\n"
+        f"🚖 Ваш заказ выполнил: {driver_name}\n"
+        f"🚗 Машина: {car_model}\n"
+        f"🔢 Номер: {car_number}\n\n"
+        f"💰 Стоимость: {price_str}\n\n"
+        f"⭐ Ваша оценка: {rating} из 5\n"
+        "🙏 Спасибо за отзыв!"
+    )
+    try:
+        await callback.message.edit_text(new_text, reply_markup=keyboards.get_support_only_keyboard())
+    except Exception:
+        pass
+
     try:
         await state.clear()
         sent = await callback.message.answer(
@@ -3996,6 +4027,103 @@ async def rate_trip_callback(callback: CallbackQuery, state: FSMContext):
         await state.update_data(last_menu_msg_id=sent.message_id)
     except Exception as e:
         logger.error(f"Failed to send menu after rating for {callback.from_user.id}: {e}")
+
+
+async def _finalize_rating_from_message(message: Message, state: FSMContext, order_id: int, rating: int, comment: str | None):
+    """Вариант _finalize_rating для вызова из Message-хендлера (не из callback)."""
+    try:
+        order_resp = await get_http_client().get(f"/taxi/order/{order_id}")
+        ord_data = order_resp.json() if order_resp.status_code == 200 else {}
+    except Exception:
+        ord_data = {}
+
+    driver_name = ord_data.get("driver_name", "—")
+    car_model = ord_data.get("car_model", "—")
+    car_number = ord_data.get("car_number", "—")
+    route_text = _format_route_from_values(ord_data.get("from_address"), ord_data.get("to_address"))
+    price = ord_data.get("price")
+    price_str = f"{price:.0f} руб." if isinstance(price, (int, float)) else "—"
+    driver_id = ord_data.get("driver_id")
+
+    if driver_id is not None:
+        try:
+            await get_http_client().post("/taxi/review", json={
+                "order_id": order_id,
+                "driver_id": driver_id,
+                "client_telegram_id": message.from_user.id,
+                "rating": rating,
+                "comment": comment,
+            })
+        except Exception as e:
+            logger.error(f"Failed to save review for order {order_id}: {e}")
+
+    new_text = (
+        "✅ Поездка завершена!\n\n"
+        f"{route_text}\n\n"
+        f"🚖 Ваш заказ выполнил: {driver_name}\n"
+        f"🚗 Машина: {car_model}\n"
+        f"🔢 Номер: {car_number}\n\n"
+        f"💰 Стоимость: {price_str}\n\n"
+        f"⭐ Ваша оценка: {rating} из 5\n"
+        "🙏 Спасибо за отзыв!"
+    )
+
+    # Редактируем сообщение бота с формой отзыва
+    data = await state.get_data()
+    last_msg_id = data.get("last_bot_msg_id")
+    edited = False
+    if last_msg_id:
+        try:
+            await message.bot.edit_message_text(
+                chat_id=message.chat.id,
+                message_id=last_msg_id,
+                text=new_text,
+                reply_markup=keyboards.get_support_only_keyboard(),
+            )
+            edited = True
+        except Exception:
+            pass
+    if not edited:
+        try:
+            await message.answer(new_text, reply_markup=keyboards.get_support_only_keyboard())
+        except Exception:
+            pass
+
+    try:
+        await state.clear()
+        sent = await message.answer(
+            "Нажмите кнопку ниже, чтобы заказать такси снова.",
+            reply_markup=keyboards.get_start_order_inline_keyboard(),
+        )
+        await state.update_data(last_menu_msg_id=sent.message_id)
+    except Exception as e:
+        logger.error(f"Failed to send menu after rating for {message.from_user.id}: {e}")
+
+
+@router.message(ReviewFlow.waiting_for_comment, F.text)
+async def review_comment_handler(message: Message, state: FSMContext):
+    """Принимает текстовый комментарий к низкой оценке."""
+    data = await state.get_data()
+    rating = data.get("pending_rating", 1)
+    order_id = data.get("pending_rating_order_id")
+    comment = message.text.strip()
+
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+    await _finalize_rating_from_message(message, state, order_id, rating, comment=comment)
+
+
+@router.callback_query(F.data == "skip_review_comment")
+async def skip_review_comment_callback(callback: CallbackQuery, state: FSMContext):
+    """Пропустить комментарий к низкой оценке."""
+    await callback.answer()
+    data = await state.get_data()
+    rating = data.get("pending_rating", 1)
+    order_id = data.get("pending_rating_order_id")
+    await _finalize_rating(callback, state, order_id, rating, comment=None)
 
     # Оценка анонимна: водитель НЕ получает уведомление о конкретной оценке.
     # Оценка отображается только клиенту в сообщении выше.

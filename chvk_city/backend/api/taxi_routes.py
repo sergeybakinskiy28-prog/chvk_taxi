@@ -5,7 +5,8 @@ from chvk_city.backend.services.taxi_service import TaxiService
 from chvk_city.backend.models.user import User
 from chvk_city.backend.models.driver import Driver
 from chvk_city.backend.models.order import Order
-from sqlalchemy import select
+from chvk_city.backend.models.review import Review
+from sqlalchemy import select, func as sqlfunc
 from pydantic import BaseModel
 from typing import List
 import datetime
@@ -688,6 +689,7 @@ async def get_order(order_id: int, db: AsyncSession = Depends(get_db)):
         "id": order.id,
         "client_telegram_id": user.telegram_id,
         "client_phone": user.phone,
+        "driver_id": order.driver_id,
         "driver_telegram_id": driver_telegram_id,
         "driver_phone": driver_phone,
         "driver_name": driver_name,
@@ -887,3 +889,90 @@ async def get_order_history(user_id: int, limit: int = 10, db: AsyncSession = De
         )
         for o in orders
     ]
+
+
+class ReviewCreate(BaseModel):
+    order_id: int
+    driver_id: int
+    client_telegram_id: int
+    rating: int
+    comment: str | None = None
+
+
+@router.post("/review")
+async def create_review(data: ReviewCreate, db: AsyncSession = Depends(get_db)):
+    """Сохранить отзыв клиента о поездке."""
+    review = Review(
+        order_id=data.order_id,
+        driver_id=data.driver_id,
+        client_telegram_id=data.client_telegram_id,
+        rating=data.rating,
+        comment=data.comment,
+    )
+    db.add(review)
+    await db.commit()
+    return {"status": "ok"}
+
+
+@router.get("/driver/{telegram_id}/reviews")
+async def get_driver_reviews(telegram_id: int, db: AsyncSession = Depends(get_db)):
+    """Список отзывов водителя + средний рейтинг."""
+    driver_result = await db.execute(
+        select(Driver).join(User, Driver.user_id == User.id).where(User.telegram_id == telegram_id)
+    )
+    driver = driver_result.scalar_one_or_none()
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver not found")
+
+    result = await db.execute(
+        select(Review).where(Review.driver_id == driver.id).order_by(Review.created_at.desc())
+    )
+    reviews = result.scalars().all()
+    total = len(reviews)
+    avg = round(sum(r.rating for r in reviews) / total, 2) if total else 0.0
+
+    return {
+        "average_rating": avg,
+        "total_reviews": total,
+        "reviews": [
+            {
+                "order_id": r.order_id,
+                "rating": r.rating,
+                "comment": r.comment,
+                "created_at": r.created_at.isoformat() if r.created_at else "",
+            }
+            for r in reviews
+        ],
+    }
+
+
+@router.get("/reviews/bad")
+async def get_bad_reviews(db: AsyncSession = Depends(get_db)):
+    """Все отзывы с рейтингом <= 3, с именами водителя и клиента."""
+    result = await db.execute(
+        select(Review).where(Review.rating <= 3).order_by(Review.created_at.desc())
+    )
+    reviews = result.scalars().all()
+
+    output = []
+    for r in reviews:
+        driver_result = await db.execute(
+            select(Driver, User).join(User, Driver.user_id == User.id).where(Driver.id == r.driver_id)
+        )
+        drv_row = driver_result.first()
+        driver_name = drv_row[1].full_name if drv_row else "—"
+
+        client_result = await db.execute(select(User).where(User.telegram_id == r.client_telegram_id))
+        client = client_result.scalar_one_or_none()
+        client_name = client.full_name if client else str(r.client_telegram_id)
+
+        output.append({
+            "order_id": r.order_id,
+            "driver_name": driver_name,
+            "client_name": client_name,
+            "rating": r.rating,
+            "comment": r.comment,
+            "created_at": r.created_at.isoformat() if r.created_at else "",
+        })
+
+    return output

@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from chvk_city.backend.api import taxi_routes
 from chvk_city.backend.database.db import engine, Base
+from chvk_city.backend.models import review as _review_model  # noqa: F401 — registers Review with Base
 
 app = FastAPI(title="CHVK City Services - Taxi MVP")
 
