@@ -2499,12 +2499,40 @@ async def cancel_order_creation_callback(callback: CallbackQuery, state: FSMCont
 
 
 async def _handle_offer_timeout(bot, order_id: int, driver_tg_id: int, timeout: int):
-    """Таймер: если водитель не ответил — штраф и передача следующему."""
-    await asyncio.sleep(timeout)
+    """Таймер: обратный отсчёт, затем штраф и передача следующему."""
+    remaining = timeout
+    while remaining > 0:
+        step = min(5, remaining)
+        await asyncio.sleep(step)
+        remaining -= step
+        if pending_offers.get(order_id) != driver_tg_id:
+            return  # уже принято или отменено
+        if remaining > 0:
+            order_info = pending_order_data.get(order_id, {})
+            msg_id = order_info.get(f"offer_msg_{driver_tg_id}")
+            if msg_id:
+                try:
+                    msg_text = f"⏱ <b>Осталось {remaining} сек.</b>\n\n" + order_info.get("driver_msg", "")
+                    await bot.edit_message_text(
+                        chat_id=driver_tg_id,
+                        message_id=msg_id,
+                        text=msg_text,
+                        reply_markup=keyboards.get_accept_order_keyboard(order_id),
+                        parse_mode="HTML",
+                    )
+                except Exception:
+                    pass
+
     if pending_offers.get(order_id) != driver_tg_id:
         return  # уже принято или отменено
     pending_offers.pop(order_id, None)
     offer_tasks.pop(order_id, None)
+    # Добавляем в declined
+    order_info = pending_order_data.get(order_id)
+    if order_info is not None:
+        declined = order_info.get("declined_drivers", set())
+        declined.add(driver_tg_id)
+        order_info["declined_drivers"] = declined
     # Штраф
     try:
         await get_http_client().post(f"/taxi/driver/{driver_tg_id}/penalty")
@@ -2532,10 +2560,11 @@ async def _offer_order_to_next(bot, order_id: int):
     timeout = OFFER_TIMEOUT_INTERCITY if is_intercity else OFFER_TIMEOUT_CITY
 
     from_zone = order_info.get("from_zone")
+    declined = order_info.get("declined_drivers", set())
 
     # Найти подходящего водителя с приоритетом по району
     busy_ids = set(pending_offers.values())
-    candidates = [d for d in driver_queue if d not in busy_ids]
+    candidates = [d for d in driver_queue if d not in busy_ids and d not in declined]
 
     designated = None
 
@@ -2559,19 +2588,31 @@ async def _offer_order_to_next(bot, order_id: int):
         designated = candidates[0]
 
     if designated is None:
-        return  # все заняты или очередь пуста
+        # Все водители отклонили или заняты — уведомляем клиента
+        client_tg_id = order_info.get("client_tg_id")
+        if client_tg_id:
+            try:
+                await bot.send_message(
+                    client_tg_id,
+                    "😔 К сожалению, свободных водителей сейчас нет. Попробуйте заказать через несколько минут.",
+                )
+            except Exception:
+                pass
+        pending_order_data.pop(order_id, None)
+        return
 
     print(f"[QUEUE] Заказ #{order_id}: from_zone={from_zone!r}, выбран водитель {designated} (район: {driver_districts.get(designated, '?')})", flush=True)
 
     pending_offers[order_id] = designated
 
     try:
-        await bot.send_message(
+        sent = await bot.send_message(
             chat_id=designated,
             text=f"⏱ <b>У вас {timeout} сек. на принятие заказа!</b>\n\n" + driver_msg,
             reply_markup=keyboards.get_accept_order_keyboard(order_id),
             parse_mode="HTML",
         )
+        order_info[f"offer_msg_{designated}"] = sent.message_id
     except Exception as e:
         logger.error(f"Failed to send queue offer to driver {designated}: {e}")
         pending_offers.pop(order_id, None)
@@ -2612,7 +2653,7 @@ async def _preorder_notify_task(
     except Exception as e:
         logger.error(f"Preorder driver chat error: {e}")
     # Запускаем очередь
-    pending_order_data[order_id] = {"driver_msg": driver_msg, "is_intercity": is_intercity, "from_zone": from_zone}
+    pending_order_data[order_id] = {"driver_msg": driver_msg, "is_intercity": is_intercity, "from_zone": from_zone, "client_tg_id": client_tg_id, "declined_drivers": set()}
     asyncio.create_task(_offer_order_to_next(bot, order_id))
 
 
@@ -2759,7 +2800,7 @@ async def finalize_order(
                     )
                 except Exception as e:
                     logger.error(f"Ошибка отправки в чат водителей ({settings.DRIVER_CHAT_ID}): {e}")
-                pending_order_data[order_id] = {"driver_msg": driver_msg, "is_intercity": is_intercity, "from_zone": data.get("from_zone")}
+                pending_order_data[order_id] = {"driver_msg": driver_msg, "is_intercity": is_intercity, "from_zone": data.get("from_zone"), "client_tg_id": passenger_telegram_id, "declined_drivers": set()}
                 asyncio.create_task(_offer_order_to_next(message.bot, order_id))
 
             # Снимаем состояние FSM, но оставляем order_id в data для мягкой отмены/обработки UI
@@ -3340,6 +3381,12 @@ async def ignore_order_callback(callback: CallbackQuery):
             offer_tasks[order_id].cancel()
             del offer_tasks[order_id]
         pending_offers.pop(order_id, None)
+        # Добавляем в declined
+        order_info = pending_order_data.get(order_id)
+        if order_info is not None:
+            declined = order_info.get("declined_drivers", set())
+            declined.add(driver_tg_id)
+            order_info["declined_drivers"] = declined
         # В конец очереди
         if driver_tg_id in driver_queue:
             driver_queue.remove(driver_tg_id)
