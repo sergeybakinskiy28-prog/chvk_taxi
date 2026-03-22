@@ -384,6 +384,7 @@ async def _get_menu_for_user(telegram_id: int) -> ReplyKeyboardMarkup:
     try:
         async with async_session() as db:
             driver = await TaxiService.get_driver(db, telegram_id)
+            print(f"DEBUG MENU: telegram_id={telegram_id}, driver={driver}, is_approved={driver.is_approved if driver else None}, deleted_at={getattr(driver, 'deleted_at', None)}", flush=True)
             if driver:
                 if driver.is_approved:
                     is_driver = True
